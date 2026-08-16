@@ -1,570 +1,254 @@
 #!/usr/bin/env bash
 
-DB_Info=('MySQL 5.1.73' 'MySQL 5.5.62' 'MySQL 5.6.51' 'MySQL 5.7.44' 'MySQL 8.0.39' 'MySQL 8.4.2' 'MariaDB 5.5.68' 'MariaDB 10.4.34' 'MariaDB 10.5.26' 'MariaDB 10.6.19' 'MariaDB 10.11.9')
-PHP_Info=('PHP 5.2.17' 'PHP 5.3.29' 'PHP 5.4.45' 'PHP 5.5.38' 'PHP 5.6.40' 'PHP 7.0.33' 'PHP 7.1.33' 'PHP 7.2.34' 'PHP 7.3.33' 'PHP 7.4.33' 'PHP 8.0.30' 'PHP 8.1.29' 'PHP 8.2.23' 'PHP 8.3.11')
-Apache_Info=('Apache 2.2.34' 'Apache 2.4.62')
+DB_Info=('retired' 'retired' 'retired' 'MySQL 5.7.44' 'MySQL 8.0.46' 'MySQL 8.4.11' 'MySQL 9.7.1 LTS' 'retired' 'retired' 'MariaDB 10.6.27' 'MariaDB 10.11.18' 'MariaDB 11.4.12' 'MariaDB 11.8.8' 'MariaDB 12.3.2 LTS')
+PHP_Info=('retired' 'retired' 'retired' 'retired' 'retired' 'retired' 'retired' 'retired' 'retired' 'PHP 7.4.33' 'PHP 8.0.30' 'PHP 8.1.34' 'PHP 8.2.33' 'PHP 8.3.33' 'PHP 8.4.24' 'PHP 8.5.9')
+
+Database_Glibc_At_Least()
+{
+    local required=$1 actual
+    actual=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+    [ -n "${actual}" ] && [ "$(printf '%s\n' "${required}" "${actual}" | sort -V | head -n1)" = "${required}" ]
+}
+
+Select_Database_Package_Mode()
+{
+    local product=$1 version=$2 requested_mode=${3:-${DB_Install_Mode:-auto}}
+    local binary_supported=n reason='no matching official generic binary is configured'
+
+    # Keep compatibility with existing unattended installations that export Bin=y/n.
+    if [ -n "${Bin:-}" ]; then
+        case "${Bin}" in
+            y|Y|yes|YES) requested_mode=binary ;;
+            n|N|no|NO) requested_mode=source ;;
+            *) Echo_Red "Invalid legacy Bin value: ${Bin}"; return 1 ;;
+        esac
+    fi
+    case "${requested_mode}" in
+        auto|AUTO|Auto) requested_mode=auto ;;
+        binary|BINARY|Binary) requested_mode=binary ;;
+        source|SOURCE|Source) requested_mode=source ;;
+        *) Echo_Red 'DB_Install_Mode must be auto, binary or source.'; return 1 ;;
+    esac
+
+    if [ "${requested_mode}" = source ]; then
+        Bin=n
+        DB_Install_Resolved_Mode=source
+        Echo_Yellow "Database package mode: source build requested for ${product} ${version}."
+        return 0
+    fi
+
+    case "${product}:${version}" in
+        mysql:5.7.*)
+            if [ "${DB_ARCH}" != x86_64 ]; then
+                reason='MySQL 5.7 generic binary support is limited to x86_64'
+            elif ! Database_Glibc_At_Least 2.12; then
+                reason='MySQL 5.7 generic binaries require glibc 2.12 or newer'
+            else
+                binary_supported=y
+            fi
+            ;;
+        mysql:8.0.*|mysql:8.4.*|mysql:9.7.*)
+            if [[ ! "${DB_ARCH}" =~ ^(x86_64|aarch64)$ ]]; then
+                reason="MySQL ${version%.*} has no configured generic binary for ${DB_ARCH}"
+            elif ! Database_Glibc_At_Least 2.28; then
+                reason="MySQL ${version%.*} generic binaries require glibc 2.28 or newer"
+            else
+                binary_supported=y
+            fi
+            ;;
+        mariadb:10.6.*|mariadb:10.11.*|mariadb:11.4.*|mariadb:11.8.*|mariadb:12.3.*)
+            if [ "${DB_ARCH}" != x86_64 ]; then
+                reason='the verified MariaDB systemd binary set is x86_64-only'
+            elif ! Database_Glibc_At_Least 2.19; then
+                reason='MariaDB systemd binary tarballs require glibc 2.19 or newer'
+            else
+                binary_supported=y
+            fi
+            ;;
+        *) reason="${product} ${version} is outside the supported binary policy" ;;
+    esac
+
+    if [ "${binary_supported}" = y ]; then
+        Bin=y
+        DB_Install_Resolved_Mode=binary
+        Echo_Green "Database package mode: verified official generic binary for ${product} ${version}."
+        return 0
+    fi
+    if [ "${requested_mode}" = binary ]; then
+        Echo_Red "A binary install was required, but ${reason}."
+        return 1
+    fi
+
+    Bin=n
+    DB_Install_Resolved_Mode=source
+    Echo_Yellow "Automatic database package fallback: ${reason}; using a source build."
+    return 0
+}
 
 Database_Selection()
 {
-#which MySQL Version do you want to install?
-    if [ -z ${DBSelect} ]; then
-        DBSelect="2"
-        Echo_Yellow "You have 11 options for your DataBase install."
-        echo "1: Install ${DB_Info[0]}"
-        echo "2: Install ${DB_Info[1]} (Default)"
-        echo "3: Install ${DB_Info[2]}"
-        echo "4: Install ${DB_Info[3]}"
-        echo "5: Install ${DB_Info[4]}"
-        echo "6: Install ${DB_Info[5]}"
-        echo "7: Install ${DB_Info[6]}"
-        echo "8: Install ${DB_Info[7]}"
-        echo "9: Install ${DB_Info[8]}"
-        echo "10: Install ${DB_Info[9]}"
-        echo "11: Install ${DB_Info[10]}"
-        echo "0: DO NOT Install MySQL/MariaDB"
-        read -p "Enter your choice (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 or 0): " DBSelect
-    fi
-
-    case "${DBSelect}" in
-    1)
-        echo "You will install ${DB_Info[0]}"
-        ;;
-    2)
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[1]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[1]} from Source."
-                Bin="n"
-                ;;
-            *)
-                Bin="n"
-                ;;
-            esac
-        else
-            echo "Default install ${DB_Info[1]} from Source."
-            Bin="n"
-        fi
-        ;;
-    3)
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[2]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[2]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[2]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[2]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    4)
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[3]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[3]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[3]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[3]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    5)
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" || "${DB_ARCH}" = "aarch64" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[4]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[4]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[4]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[4]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    6)
-        echo "You will install ${DB_Info[5]}"
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" || "${DB_ARCH}" = "aarch64" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[5]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[5]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[5]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[5]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    7)
-        echo "You will install ${DB_Info[6]}"
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[6]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[6]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[6]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[6]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    8)
-        echo "You will install ${DB_Info[7]}"
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[7]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[7]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[7]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[7]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    9)
-        echo "You will install ${DB_Info[8]}"
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[8]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[8]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[8]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[8]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    10)
-        echo "You will install ${DB_Info[9]}"
-        if [[ "${DB_ARCH}" = "x86_64" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[9]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[9]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[9]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[9]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    11)
-        echo "You will install ${DB_Info[10]}"
-        if [[ "${DB_ARCH}" = "x86_64" ]]; then
-            if [ -z ${Bin} ]; then
-                read -p "Using Generic Binaries [y/n]: " Bin
-            fi
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install ${DB_Info[10]} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install ${DB_Info[10]} from Source."
-                Bin="n"
-                ;;
-            *)
-                if [ "${CheckMirror}" != "n" ]; then
-                    echo "Default install ${DB_Info[10]} Using Generic Binaries."
-                    Bin="y"
-                else
-                    echo "Default install ${DB_Info[10]} from Source."
-                    Bin="n"
-                fi
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-        ;;
-    0)
-        echo "Do not install MySQL/MariaDB!"
-        ;;
-    *)
-        echo "No input,You will install ${DB_Info[1]}"
-        DBSelect="2"
-    esac
-
-    if [ "${Bin}" != "y" ] && [[ "${DBSelect}" =~ ^[5-6]|[8-9]|1[0-1]$ ]] && [ $(awk '/MemTotal/ {printf( "%d\n", $2 / 1024 )}' /proc/meminfo) -le 1024 ]; then
-        echo "Memory less than 1GB, can't install MySQL 8.0 or MairaDB 10.3+!"
-        exit 1
-    fi
-
-    if [[ "${DBSelect}" =~ ^[789]|1[0-1]$ ]]; then
-        MySQL_Bin="/usr/local/mariadb/bin/mysql"
-        MySQL_Config="/usr/local/mariadb/bin/mysql_config"
-        MySQL_Dir="/usr/local/mariadb"
-    elif [[ "${DBSelect}" =~ ^[123456]$ ]]; then
-        MySQL_Bin="/usr/local/mysql/bin/mysql"
-        MySQL_Config="/usr/local/mysql/bin/mysql_config"
-        MySQL_Dir="/usr/local/mysql"
-    fi
-
-    if [[ "${DBSelect}" != "0" ]]; then
-        #set mysql root password
-        if [ -z ${DB_Root_Password} ]; then
-            echo "==========================="
-            DB_Root_Password="root"
-            Echo_Yellow "Please setup root password of MySQL."
-            read -p "Please enter: " DB_Root_Password
-            if [ "${DB_Root_Password}" = "" ]; then
-                echo "NO input,password will be generated randomly."
-                DB_Root_Password="lnmp.org#$RANDOM"
-            fi
-        fi
-        echo "MySQL root password: ${DB_Root_Password}"
-
-        #do you want to enable or disable the InnoDB Storage Engine?
-        echo "==========================="
-
-        if [ -z ${InstallInnodb} ]; then
-            InstallInnodb="y"
-            Echo_Yellow "Do you want to enable or disable the InnoDB Storage Engine?"
-            read -p "Default enable,Enter your choice [Y/n]: " InstallInnodb
-        fi
-
-        case "${InstallInnodb}" in
-        [yY][eE][sS]|[yY])
-            echo "You will enable the InnoDB Storage Engine"
-            InstallInnodb="y"
-            ;;
-        [nN][oO]|[nN])
-            echo "You will disable the InnoDB Storage Engine!"
-            InstallInnodb="n"
-            ;;
-        *)
-            echo "No input,The InnoDB Storage Engine will enable."
-            InstallInnodb="y"
+    local db_choice db_product db_version
+    if [ -z "${DBSelect:-}" ]; then
+        Echo_Yellow "Supported databases (MySQL 5.7 is the compatibility floor):"
+        echo "1: ${DB_Info[3]}"
+        echo "2: ${DB_Info[4]}"
+        echo "3: ${DB_Info[5]} (Default)"
+        echo "4: ${DB_Info[6]}"
+        echo "5: ${DB_Info[9]}"
+        echo "6: ${DB_Info[10]}"
+        echo "7: ${DB_Info[11]}"
+        echo "8: ${DB_Info[12]}"
+        echo "9: ${DB_Info[13]}"
+        echo "0: Do not install a database"
+        read -r -p "Enter your choice (0-9, default 3): " db_choice
+        case "${db_choice:-3}" in
+            1) DBSelect=4 ;;
+            2) DBSelect=5 ;;
+            3) DBSelect=6 ;;
+            4) DBSelect=7 ;;
+            5) DBSelect=10 ;;
+            6) DBSelect=11 ;;
+            7) DBSelect=12 ;;
+            8) DBSelect=13 ;;
+            9) DBSelect=14 ;;
+            0) DBSelect=0 ;;
+            *) Echo_Red "Unsupported database selection."; return 1 ;;
+        esac
+    else
+        case "${DBSelect}" in
+            mysql-5.7|mysql5.7) DBSelect=4 ;;
+            mysql-8.0|mysql8.0) DBSelect=5 ;;
+            mysql-8.4|mysql8.4) DBSelect=6 ;;
+            mysql-9.7|mysql9.7) DBSelect=7 ;;
+            mariadb-10.6) DBSelect=10 ;;
+            mariadb-10.11) DBSelect=11 ;;
+            mariadb-11.4) DBSelect=12 ;;
+            mariadb-11.8) DBSelect=13 ;;
+            mariadb-12.3) DBSelect=14 ;;
+            0|4|5|6|7|10|11|12|13|14) ;;
+            *) Echo_Red "Unsupported database. Minimum supported versions are MySQL 5.7 and MariaDB 10.6."; return 1 ;;
         esac
     fi
+
+    if [ "${DBSelect}" = "0" ]; then
+        echo "Database installation disabled."
+        return 0
+    fi
+
+    echo "You will install ${DB_Info[DBSelect-1]}"
+    db_version=$(printf '%s\n' "${DB_Info[DBSelect-1]}" | awk '{print $2}')
+    if [[ "${DBSelect}" =~ ^[4-7]$ ]]; then
+        db_product=mysql
+    else
+        db_product=mariadb
+    fi
+    Select_Database_Package_Mode "${db_product}" "${db_version}" "${DB_Install_Mode:-auto}" || return 1
+
+    if [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
+        MySQL_Bin=/usr/local/mariadb/bin/mysql
+        MySQL_Config=/usr/local/mariadb/bin/mysql_config
+        MySQL_Dir=/usr/local/mariadb
+    else
+        MySQL_Bin=/usr/local/mysql/bin/mysql
+        MySQL_Config=/usr/local/mysql/bin/mysql_config
+        MySQL_Dir=/usr/local/mysql
+    fi
+
+    if [ -z "${DB_Root_Password:-}" ]; then
+        read -r -s -p "Database root password (blank generates one): " DB_Root_Password
+        echo
+        if [ -z "${DB_Root_Password}" ]; then
+            DB_Root_Password=$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)
+            umask 077
+            printf '%s\n' "${DB_Root_Password}" > /root/.lnmp-db-root-password
+        fi
+    fi
+
+    if [ -z "${InstallInnodb:-}" ]; then
+        read -r -p "Tune both InnoDB and MyISAM? [Y/n; n = MyISAM-only tuning]: " InstallInnodb
+    fi
+    case "${InstallInnodb:-y}" in
+        [nN]|[nN][oO])
+            InstallInnodb=n
+            Echo_Yellow "MyISAM-only tuning selected. MySQL 5.7+ still keeps mandatory InnoDB available."
+            ;;
+        *) InstallInnodb=y ;;
+    esac
+    return 0
 }
 
 PHP_Selection()
 {
-#which PHP Version do you want to install?
-    if [ -z ${PHPSelect} ]; then
-        echo "==========================="
-
-        PHPSelect="3"
-        Echo_Yellow "You have 9 options for your PHP install."
-        echo "1: Install ${PHP_Info[0]}"
-        echo "2: Install ${PHP_Info[1]}"
-        echo "3: Install ${PHP_Info[2]}"
-        echo "4: Install ${PHP_Info[3]}"
-        echo "5: Install ${PHP_Info[4]} (Default)"
-        echo "6: Install ${PHP_Info[5]}"
-        echo "7: Install ${PHP_Info[6]}"
-        echo "8: Install ${PHP_Info[7]}"
-        echo "9: Install ${PHP_Info[8]}"
-        echo "10: Install ${PHP_Info[9]}"
-        echo "11: Install ${PHP_Info[10]}"
-        echo "12: Install ${PHP_Info[11]}"
-        echo "13: Install ${PHP_Info[12]}"
-        echo "14: Install ${PHP_Info[13]}"
-        read -p "Enter your choice (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14): " PHPSelect
+    local php_choice
+    if [ -z "${PHPSelect:-}" ]; then
+        Echo_Yellow "Supported PHP versions (7.4.33 is the compatibility floor):"
+        echo "1: ${PHP_Info[9]} (legacy compatibility)"
+        echo "2: ${PHP_Info[10]}"
+        echo "3: ${PHP_Info[11]}"
+        echo "4: ${PHP_Info[12]}"
+        echo "5: ${PHP_Info[13]}"
+        echo "6: ${PHP_Info[14]}"
+        echo "7: ${PHP_Info[15]} (Default)"
+        read -r -p "Enter your choice (1-7, default 7): " php_choice
+        case "${php_choice:-7}" in
+            1) PHPSelect=10 ;;
+            2) PHPSelect=11 ;;
+            3) PHPSelect=12 ;;
+            4) PHPSelect=13 ;;
+            5) PHPSelect=14 ;;
+            6) PHPSelect=15 ;;
+            7) PHPSelect=16 ;;
+            *) Echo_Red "Unsupported PHP selection."; return 1 ;;
+        esac
+    else
+        case "${PHPSelect}" in
+            php-7.4|7.4) PHPSelect=10 ;;
+            php-8.0|8.0) PHPSelect=11 ;;
+            php-8.1|8.1) PHPSelect=12 ;;
+            php-8.2|8.2) PHPSelect=13 ;;
+            php-8.3|8.3) PHPSelect=14 ;;
+            php-8.4|8.4) PHPSelect=15 ;;
+            php-8.5|8.5) PHPSelect=16 ;;
+            10|11|12|13|14|15|16) ;;
+            *) Echo_Red "Unsupported PHP version. PHP 7.4.33 is the minimum."; return 1 ;;
+        esac
     fi
-
-    case "${PHPSelect}" in
-    1)
-        echo "You will install ${PHP_Info[0]}"
-        if [[ "${DBSelect}" = 0 ]]; then
-            echo "You didn't select MySQL/MariaDB can't select ${PHP_Info[0]}!"
-            exit 1
-        fi
-        ;;
-    2)
-        echo "You will install ${PHP_Info[1]}"
-        ;;
-    3)
-        echo "You will Install ${PHP_Info[2]}"
-        ;;
-    4)
-        echo "You will install ${PHP_Info[3]}"
-        ;;
-    5)
-        echo "You will install ${PHP_Info[4]}"
-        ;;
-    6)
-        echo "You will install ${PHP_Info[5]}"
-        ;;
-    7)
-        echo "You will install ${PHP_Info[6]}"
-        ;;
-    8)
-        echo "You will install ${PHP_Info[7]}"
-        ;;
-    9)
-        echo "You will install ${PHP_Info[8]}"
-        ;;
-    10)
-        echo "You will install ${PHP_Info[9]}"
-        ;;
-    11)
-        echo "You will install ${PHP_Info[10]}"
-        ;;
-    12)
-        echo "You will install ${PHP_Info[11]}"
-        ;;
-    13)
-        echo "You will install ${PHP_Info[12]}"
-        ;;
-    14)
-        echo "You will install ${PHP_Info[13]}"
-        ;;
-    *)
-        echo "No input,You will install ${PHP_Info[4]}"
-        PHPSelect="5"
-    esac
+    echo "You will install ${PHP_Info[PHPSelect-1]}"
+    return 0
 }
 
-MemoryAllocator_Selection()
+Configure_Build_Defaults()
 {
-#which Memory Allocator do you want to install?
-    if [ -z ${SelectMalloc} ]; then
-        echo "==========================="
-
-        SelectMalloc="1"
-        Echo_Yellow "You have 3 options for your Memory Allocator install."
-        echo "1: Don't install Memory Allocator. (Default)"
-        echo "2: Install Jemalloc"
-        echo "3: Install TCMalloc"
-        read -p "Enter your choice (1, 2 or 3): " SelectMalloc
-    fi
-
-    case "${SelectMalloc}" in
-    1)
-        echo "You will install not install Memory Allocator."
-        ;;
-    2)
-        echo "You will install JeMalloc"
-        ;;
-    3)
-        echo "You will Install TCMalloc"
-        ;;
-    *)
-        echo "No input,You will not install Memory Allocator."
-        SelectMalloc="1"
-    esac
-
-    if [ "${SelectMalloc}" =  "1" ]; then
-        MySQL51MAOpt=''
-        MySQLMAOpt=''
-        NginxMAOpt=''
-    elif [ "${SelectMalloc}" =  "2" ]; then
-        MySQL51MAOpt='--with-mysqld-ldflags=-ljemalloc'
-        MySQLMAOpt='[mysqld_safe]
-malloc-lib=/usr/lib/libjemalloc.so'
-        NginxMAOpt="--with-ld-opt='-ljemalloc'"
-    elif [ "${SelectMalloc}" =  "3" ]; then
-        MySQL51MAOpt='--with-mysqld-ldflags=-ltcmalloc'
-        MySQLMAOpt='[mysqld_safe]
-malloc-lib=/usr/lib/libtcmalloc.so'
-        NginxMAOpt='--with-google_perftools_module'
-    fi
+    MySQLMAOpt=''
+    NginxMAOpt=''
 }
 
 Dispaly_Selection()
 {
-    Database_Selection
-    PHP_Selection
-    MemoryAllocator_Selection
+    Database_Selection || exit 1
+    PHP_Selection || exit 1
+    Configure_Build_Defaults
 }
 
-Apache_Selection()
+Wait_For_Package_Manager()
 {
-    echo "==========================="
-    #set Server Administrator Email Address
-    if [ -z ${ServerAdmin} ]; then
-        ServerAdmin=""
-        read -p "Please enter Administrator Email Address: " ServerAdmin
-    fi
-    if [ "${ServerAdmin}" == "" ]; then
-        echo "Administrator Email Address will set to webmaster@example.com!"
-        ServerAdmin="webmaster@example.com"
-    else
-        echo "==========================="
-        echo Server Administrator Email: "${ServerAdmin}"
-        echo "==========================="
-    fi
-    echo "==========================="
-
-#which Apache Version do you want to install?
-    if [ -z ${ApacheSelect} ]; then
-        ApacheSelect="1"
-        Echo_Yellow "You have 2 options for your Apache install."
-        echo "1: Install ${Apache_Info[0]}"
-        echo "2: Install ${Apache_Info[1]} (Default)"
-        read -p "Enter your choice (1 or 2): " ApacheSelect
-    fi
-
-    if [ "${ApacheSelect}" = "1" ]; then
-        echo "You will install ${Apache_Info[0]}"
-    elif [ "${ApacheSelect}" = "2" ]; then
-        echo "You will install ${Apache_Info[1]}"
-    else
-        echo "No input,You will install ${Apache_Info[1]}"
-        ApacheSelect="2"
-    fi
-    if [[ "${PHPSelect}" = "1" && "${ApacheSelect}" = "2" ]]; then
-        Echo_Red "PHP 5.2.17 is not compatible with Apache 2.4.*."
-        Echo_Red "Force use Apache 2.2.31"
-        ApacheSelect="1"
-    fi
-}
-
-Kill_PM()
-{
-    if ps aux | grep -E "yum|dnf" | grep -qv "grep"; then
-        kill -9 $(ps -ef|grep -E "yum|dnf"|grep -v grep|awk '{print $2}')
-        if [ -s /var/run/yum.pid ]; then
-            rm -f /var/run/yum.pid
+    local attempt
+    for attempt in $(seq 1 24); do
+        if ! pgrep -x yum >/dev/null 2>&1 && ! pgrep -x dnf >/dev/null 2>&1 && \
+           ! pgrep -x apt >/dev/null 2>&1 && ! pgrep -x apt-get >/dev/null 2>&1 && \
+           ! pgrep -x dpkg >/dev/null 2>&1; then
+            return 0
         fi
-    elif ps aux | grep -E "apt-get|dpkg|apt" | grep -qv "grep"; then
-        kill -9 $(ps -ef|grep -E "apt-get|apt|dpkg"|grep -v grep|awk '{print $2}')
-        if [[ -s /var/lib/dpkg/lock-frontend || -s /var/lib/dpkg/lock ]]; then
-            rm -f /var/lib/dpkg/lock-frontend
-            rm -f /var/lib/dpkg/lock
-            dpkg --configure -a
-        fi
-    fi
+        [ "${attempt}" -eq 1 ] && Echo_Yellow 'Another package manager is active; waiting up to 120 seconds without killing it or deleting lock files.'
+        sleep 5
+    done
+    Echo_Red 'The package manager is still active. Finish it cleanly, then rerun the installer.'
+    return 1
 }
 
 Press_Install()
 {
-    if [ -z ${LNMP_Auto} ]; then
+    if [ -z "${LNMP_Auto:-}" ]; then
         echo ""
         Echo_Green "Press any key to install...or Press Ctrl+c to cancel"
         OLDCONFIG=`stty -g`
@@ -573,7 +257,7 @@ Press_Install()
         stty ${OLDCONFIG}
     fi
     . include/version.sh
-    Kill_PM
+    Wait_For_Package_Manager || exit 1
 }
 
 Press_Start()
@@ -721,6 +405,9 @@ Get_RHEL_Version()
         elif grep -Eqi "release 9." /etc/redhat-release; then
             echo "Current Version: RHEL Ver 9"
             RHEL_Ver='9'
+        elif grep -Eqi "release 10." /etc/redhat-release; then
+            echo "Current Version: RHEL Ver 10"
+            RHEL_Ver='10'
         fi
         RHEL_Version="$(cat /etc/redhat-release | sed 's/.*release\ //' | sed 's/\ .*//')"
     fi
@@ -753,13 +440,138 @@ Get_OS_Bit()
 
 Download_Files()
 {
-    local URL=$1
-    local FileName=$2
+    local URL="$1"
+    local FileName="$2"
+    local IntegrityPolicy="${3:-pinned}"
+    local PartFile="${FileName}.part"
+    local Host verify_status
+
+    case "${URL}" in
+        https://*) ;;
+        *) Echo_Red "Refusing non-HTTPS download: ${URL}"; return 1 ;;
+    esac
+    Host=${URL#https://}
+    Host=${Host%%/*}
+    Host=${Host%%:*}
+    case "${Host}" in
+        archive.mariadb.org|archives.boost.io|cdn.mysql.com|curl.se|download.pureftpd.org|download.redis.io|download.savannah.gnu.org|downloads.ioncube.com|files.phpmyadmin.net|ftp.gnu.org|github.com|libzip.org|nginx.org|pecl.php.net|www.openssl.org|www.php.net|www.sourceguardian.com) ;;
+        *) Echo_Red "Refusing download from unapproved host: ${Host}"; return 1 ;;
+    esac
+    case "${IntegrityPolicy}" in
+        pinned|publisher-tls) ;;
+        *) Echo_Red "Invalid download integrity policy: ${IntegrityPolicy}"; return 1 ;;
+    esac
+    if [[ -z "${FileName}" || "${FileName}" == */* || "${FileName}" == *..* ]]; then
+        Echo_Red "Unsafe download filename: ${FileName}"
+        return 1
+    fi
+
     if [ -s "${FileName}" ]; then
-        echo "${FileName} [found]"
+        Verify_Download "${FileName}"
+        verify_status=$?
+        if [ "${verify_status}" -eq 0 ]; then
+            echo "${FileName} [found and verified]"
+            return 0
+        fi
+        if [ "${verify_status}" -eq 2 ] && [ "${IntegrityPolicy}" = publisher-tls ]; then
+            Echo_Yellow "Refreshing unpinned publisher archive ${FileName}; cached copies are never trusted."
+            rm -f -- "${FileName}"
+        fi
+    fi
+
+    rm -f "${PartFile}"
+    echo "Downloading ${FileName} from ${URL}..."
+    if command -v curl >/dev/null 2>&1; then
+        curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 --retry 3 --connect-timeout 20 --output "${PartFile}" "${URL}"
     else
-        echo "Notice: ${FileName} not found!!!download now..."
-        wget -c --progress=dot -e dotbytes=20M --prefer-family=IPv4 --no-check-certificate ${URL}
+        wget --https-only --secure-protocol=TLSv1_2 --max-redirect=5 --timeout=30 --tries=3 --output-document="${PartFile}" "${URL}"
+    fi
+    if [ $? -ne 0 ] || [ ! -s "${PartFile}" ]; then
+        rm -f "${PartFile}"
+        Echo_Red "Download failed: ${URL}"
+        return 1
+    fi
+    mv -f "${PartFile}" "${FileName}"
+    Verify_Download "${FileName}"
+    verify_status=$?
+    if [ "${verify_status}" -eq 2 ] && [ "${IntegrityPolicy}" = publisher-tls ]; then
+        Echo_Yellow "${FileName} is not pinned; accepted only from approved publisher ${Host} over verified TLS."
+        return 0
+    fi
+    if [ "${verify_status}" -ne 0 ]; then
+        rm -f -- "${FileName}"
+        return 1
+    fi
+    return 0
+}
+
+Verify_Download()
+{
+    local FileName="$1"
+    local ChecksumFile="${cur_dir}/src/checksums.sha256"
+    local MD5ChecksumFile="${cur_dir}/src/checksums.md5"
+    local Expected
+    local Actual
+
+    [ -s "${FileName}" ] || return 1
+    Expected=""
+    if [ -s "${ChecksumFile}" ]; then
+        Expected=$(awk -v name="${FileName}" '$2 == name {print $1; exit}' "${ChecksumFile}")
+    fi
+    if [ -n "${Expected}" ]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            Actual=$(sha256sum "${FileName}" | awk '{print $1}')
+        else
+            Actual=$(openssl dgst -sha256 "${FileName}" | awk '{print $NF}')
+        fi
+        if [ "${Actual}" != "${Expected}" ]; then
+            Echo_Red "SHA-256 mismatch for ${FileName}. File removed."
+            rm -f "${FileName}"
+            return 1
+        fi
+        return 0
+    fi
+    if [ -s "${MD5ChecksumFile}" ]; then
+        Expected=$(awk -v name="${FileName}" '$2 == name {print $1; exit}' "${MD5ChecksumFile}")
+    fi
+    if [ -z "${Expected}" ]; then
+        Echo_Yellow "No pinned checksum is available for ${FileName}."
+        return 2
+    fi
+    if command -v md5sum >/dev/null 2>&1; then
+        Actual=$(md5sum "${FileName}" | awk '{print $1}')
+    else
+        Actual=$(openssl dgst -md5 "${FileName}" | awk '{print $NF}')
+    fi
+    if [ "${Actual}" != "${Expected}" ]; then
+        Echo_Red "Publisher checksum mismatch for ${FileName}. File removed."
+        rm -f "${FileName}"
+        return 1
+    fi
+    return 0
+}
+
+Validate_Archive()
+{
+    local FileName=$1
+    if ! tar tf "${FileName}" | awk '/(^\/|(^|\/)\.\.($|\/)|^[A-Za-z]:)/ { bad=1 } END { exit bad }'; then
+        Echo_Red "Unsafe archive paths detected in ${FileName}."
+        return 1
+    fi
+    if ! tar tvf "${FileName}" | awk '
+        /^[bcp]/ { bad=1 }
+        /^[lh]/ {
+            marker=" -> "; pos=index($0, marker)
+            if (!pos) { marker=" link to "; pos=index($0, marker) }
+            if (pos) {
+                target=substr($0, pos + length(marker))
+                if (target ~ /^\// || target ~ /(^|\/)\.\.($|\/)/ || target ~ /^[A-Za-z]:/) bad=1
+            }
+        }
+        END { exit bad }
+    '; then
+        Echo_Red "Unsafe archive link or special-file entry detected in ${FileName}."
+        return 1
     fi
 }
 
@@ -768,20 +580,38 @@ Tar_Cd()
     local FileName=$1
     local DirName=$2
     local extension=${FileName##*.}
-    cd ${cur_dir}/src
-    [[ -d "${DirName}" ]] && rm -rf ${DirName}
+    cd "${cur_dir}/src" || return 1
+    Validate_Archive "${FileName}" || return 1
+    [[ -d "${DirName}" ]] && rm -rf -- "${DirName}"
     echo "Uncompress ${FileName}..."
     if [ "$extension" == "gz" ] || [ "$extension" == "tgz" ]; then
-        tar zxf "${FileName}"
+        tar zxf "${FileName}" || return 1
     elif [ "$extension" == "bz2" ]; then
-        tar jxf "${FileName}"
+        tar jxf "${FileName}" || return 1
     elif [ "$extension" == "xz" ]; then
-        tar Jxf "${FileName}"
+        tar Jxf "${FileName}" || return 1
     fi
     if [ -n "${DirName}" ]; then
         echo "cd ${DirName}..."
-        cd ${DirName}
+        cd "${DirName}" || return 1
     fi
+}
+
+Validate_Install_Path()
+{
+    local path=$1 label=${2:-Path} resolved
+    if [[ -z "${path}" || "${path}" != /* || "${path}" =~ [^/A-Za-z0-9._@+-] ]]; then
+        Echo_Red "${label} must be an absolute path containing only safe path characters."
+        return 1
+    fi
+    resolved=$(readlink -m -- "${path}" 2>/dev/null) || return 1
+    case "${resolved}" in
+        /|/bin|/bin/*|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/home|/lib|/lib/*|/lib32|/lib32/*|/lib64|/lib64/*|/media|/mnt|/opt|/proc|/proc/*|/root|/root/*|/run|/run/*|/sbin|/sbin/*|/srv|/sys|/sys/*|/tmp|/tmp/*|/usr|/usr/bin|/usr/bin/*|/usr/include|/usr/include/*|/usr/lib|/usr/lib/*|/usr/lib32|/usr/lib32/*|/usr/lib64|/usr/lib64/*|/usr/sbin|/usr/sbin/*|/var)
+            Echo_Red "Refusing unsafe ${label}: ${resolved}"
+            return 1
+            ;;
+    esac
+    return 0
 }
 
 Check_LNMPConf()
@@ -794,22 +624,19 @@ Check_LNMPConf()
         Echo_Red "Can't get values from lnmp.conf!"
         exit 1
     fi
-    if [[ "${MySQL_Data_Dir}" = "/" || "${MariaDB_Data_Dir}" = "/" || "${Default_Website_Dir}" = "/" ]]; then
-        Echo_Red "Can't set MySQL/MariaDB/Website Directory to / !"
-        exit 1
-    fi
+    Validate_Install_Path "${MySQL_Data_Dir}" 'MySQL data directory' || exit 1
+    Validate_Install_Path "${MariaDB_Data_Dir}" 'MariaDB data directory' || exit 1
+    Validate_Install_Path "${Default_Website_Dir}" 'website directory' || exit 1
 }
 
 Print_APP_Ver()
 {
-    echo "You will install ${Stack} stack."
-    if [ "${Stack}" != "lamp" ]; then
-        echo "${Nginx_Ver}"
-    fi
+    echo "You will install the LNMP stack."
+    echo "${Nginx_Ver}"
 
-    if [[ "${DBSelect}" =~ ^[123456]$ ]]; then
+    if [[ "${DBSelect}" =~ ^[4-7]$ ]]; then
         echo "${Mysql_Ver}"
-    elif [[ "${DBSelect}" =~ ^[789]|1[0-1]$ ]]; then
+    elif [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
         echo "${Mariadb_Ver}"
     elif [ "${DBSelect}" = "0" ]; then
         echo "Do not install MySQL/MariaDB!"
@@ -817,15 +644,6 @@ Print_APP_Ver()
 
     echo "${Php_Ver}"
 
-    if [ "${Stack}" != "lnmp" ]; then
-        echo "${Apache_Ver}"
-    fi
-
-    if [ "${SelectMalloc}" = "2" ]; then
-        echo "${Jemalloc_Ver}"
-    elif [ "${SelectMalloc}" = "3" ]; then
-        echo "${TCMalloc_Ver}"
-    fi
     echo "Enable InnoDB: ${InstallInnodb}"
     echo "Print lnmp.conf infomation..."
     echo "Download Mirror: ${Download_Mirror}"
@@ -837,9 +655,9 @@ Print_APP_Ver()
     if [ "${Enable_Nginx_Lua}" = "y" ]; then
         echo "enable Nginx Lua."
     fi
-    if [[ "${DBSelect}" =~ ^[123456]$ ]]; then
+    if [[ "${DBSelect}" =~ ^[4-7]$ ]]; then
         echo "Database Directory: ${MySQL_Data_Dir}"
-    elif [[ "${DBSelect}" =~ ^[789]|1[0-1]$ ]]; then
+    elif [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
         echo "Database Directory: ${MariaDB_Data_Dir}"
     elif [ "${DBSelect}" = "0" ]; then
         echo "Do not install MySQL/MariaDB!"
@@ -850,7 +668,8 @@ Print_APP_Ver()
 Print_Sys_Info()
 {
     echo "LNMP Version: ${LNMP_Ver}"
-    eval echo "${DISTRO} \${${DISTRO}_Version}"
+    local DistroVersionVar="${DISTRO}_Version"
+    echo "${DISTRO} ${!DistroVersionVar}"
     cat /etc/issue
     cat /etc/*-release
     uname -a
@@ -910,15 +729,9 @@ Check_CMPT()
             exit 1
         fi
     fi
-    if [[ "${PHPSelect}" =~ ^1[0-3]$ ]]; then
+    if [[ "${PHPSelect}" =~ ^1[0-6]$ ]]; then
         if echo "${Ubuntu_Version}" | grep -Eqi "^1[0-7]\." || echo "${Debian_Version}" | grep -Eqi "^[4-8]" || echo "${Raspbian_Version}" | grep -Eqi "^[4-8]" || echo "${CentOS_Version}" | grep -Eqi "^[4-6]"  || echo "${RHEL_Version}" | grep -Eqi "^[4-6]" || echo "${Fedora_Version}" | grep -Eqi "^2[0-3]"; then
             Echo_Red "PHP 7.4 and PHP 8.* please use latest linux distributions!"
-            exit 1
-        fi
-    fi
-    if [[ "${PHPSelect}" = "1" ]]; then
-        if echo "${Ubuntu_Version}" | grep -Eqi "^19|2[0-7]\." || echo "${Debian_Version}" | grep -Eqi "^1[0-9]" || echo "${Raspbian_Version}" | grep -Eqi "^1[0-9]" || echo "${Deepin_Version}" | grep -Eqi "^2[0-9]" || echo "${UOS_Version}" | grep -Eqi "^2[0-9]" || echo "${Fedora_Version}" | grep -Eqi "^29|3[0-9]"; then
-            Echo_Red "PHP 5.2 is not supported on very new linux versions such as Ubuntu 19+, Debian 10, Deepin 20+, Fedora 29+ etc."
             exit 1
         fi
     fi
@@ -959,10 +772,6 @@ Check_Stack()
 {
     if [[ -s /usr/local/php/sbin/php-fpm && -s /usr/local/php/etc/php-fpm.conf && -s /etc/init.d/php-fpm && -s /usr/local/nginx/sbin/nginx ]]; then
         Get_Stack="lnmp"
-    elif [[ -s /usr/local/nginx/sbin/nginx && -s /usr/local/apache/bin/httpd && -s /usr/local/apache/conf/httpd.conf && -s /etc/init.d/httpd && ! -s /usr/local/php/sbin/php-fpm ]]; then
-        Get_Stack="lnmpa"
-    elif [[ -s /usr/local/apache/bin/httpd && -s /usr/local/apache/conf/httpd.conf && -s /etc/init.d/httpd && ! -s /usr/local/php/sbin/php-fpm ]]; then
-        Get_Stack="lamp"
     else
         Get_Stack="unknow"
     fi
@@ -990,20 +799,51 @@ Check_DB()
 
 Do_Query()
 {
-    echo "$1" >/tmp/.mysql.tmp
+    local query_file
+    local query_status
+    query_file=$(mktemp /tmp/lnmp-mysql-query.XXXXXX) || return 1
+    printf '%s\n' "$1" >"${query_file}"
+    chmod 600 "${query_file}"
     Check_DB
-    ${MySQL_Bin} --defaults-file=~/.my.cnf </tmp/.mysql.tmp
-    return $?
+    ${MySQL_Bin} --defaults-file="${LNMP_MYCNF}" <"${query_file}"
+    query_status=$?
+    rm -f "${query_file}"
+    return ${query_status}
 }
 
 Make_TempMycnf()
 {
-    cat >~/.my.cnf<<EOF
+    local escaped_password=${1//\\/\\\\}
+    escaped_password=${escaped_password//\"/\\\"}
+    umask 077
+    if [ -n "${LNMP_MYCNF:-}" ]; then
+        rm -f "${LNMP_MYCNF}"
+    fi
+    LNMP_MYCNF=$(mktemp /tmp/lnmp-mycnf.XXXXXX) || return 1
+    trap 'TempMycnf_Clean' EXIT
+    trap 'TempMycnf_Clean; exit 1' HUP INT TERM
+    cat >"${LNMP_MYCNF}"<<EOF
 [client]
 user=root
-password='$1'
+password="${escaped_password}"
 EOF
-    chmod 600 ~/.my.cnf
+    chmod 600 "${LNMP_MYCNF}"
+}
+
+Set_Initial_DB_Root_Password()
+{
+    local client=$1 password=$2 sql_file escaped_password status
+    escaped_password=${password//\\/\\\\}
+    escaped_password=${escaped_password//\'/\'\'}
+    umask 077
+    sql_file=$(mktemp /tmp/lnmp-initial-password.XXXXXX) || return 1
+    printf "ALTER USER 'root'@'localhost' IDENTIFIED BY '%s';\nFLUSH PRIVILEGES;\n" \
+        "${escaped_password}" >"${sql_file}"
+    chmod 600 "${sql_file}"
+    "${client}" --protocol=socket -u root <"${sql_file}"
+    status=$?
+    rm -f "${sql_file}"
+    return "${status}"
 }
 
 Verify_DB_Password()
@@ -1021,11 +861,9 @@ Verify_DB_Password()
 
 TempMycnf_Clean()
 {
-    if [ -s ~/.my.cnf ]; then
-        rm -f ~/.my.cnf
-    fi
-    if [ -s /tmp/.mysql.tmp ]; then
-        rm -f /tmp/.mysql.tmp
+    if [ -n "${LNMP_MYCNF:-}" ]; then
+        rm -f "${LNMP_MYCNF}"
+        LNMP_MYCNF=""
     fi
 }
 

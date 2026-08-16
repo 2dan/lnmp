@@ -6,7 +6,18 @@ After=network.target
 Type=forking
 PIDFile=/var/run/pure-ftpd.pid
 ExecStart=/usr/local/pureftpd/sbin/pure-ftpd /usr/local/pureftpd/etc/pure-ftpd.conf
-PrivateTmp=false
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=-/home/wwwroot -/var/www -/srv/www -/data/www -/www/wwwroot -/usr/local/nginx/html
 
 [Install]
 WantedBy=multi-user.target

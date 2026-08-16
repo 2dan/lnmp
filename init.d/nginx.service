@@ -8,7 +8,18 @@ PIDFile=/usr/local/nginx/logs/nginx.pid
 ExecStart=/usr/local/nginx/sbin/nginx -c /usr/local/nginx/conf/nginx.conf
 ExecReload=/usr/local/nginx/sbin/nginx -s reload
 ExecStop=/bin/kill -s QUIT $MAINPID
-PrivateTmp=false
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/usr/local/nginx/logs -/usr/local/nginx/client_body_temp -/usr/local/nginx/proxy_temp -/usr/local/nginx/fastcgi_temp -/usr/local/nginx/uwsgi_temp -/usr/local/nginx/scgi_temp
 
 [Install]
 WantedBy=multi-user.target

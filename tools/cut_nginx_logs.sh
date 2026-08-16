@@ -1,30 +1,46 @@
 #!/usr/bin/env bash
-#function:cut nginx log files for lnmp v0.5 and v0.6
-#author: https://lnmp.org
+set -u
 
-#set the path to nginx log files
-log_files_path="/home/wwwlogs/"
-log_files_dir=${log_files_path}$(date -d "yesterday" +"%Y")/$(date -d "yesterday" +"%m")
-#set nginx log files you want to cut
-log_files_name=(access vpser licess)
-#set the path to nginx.
-nginx_sbin="/usr/local/nginx/sbin/nginx"
-#Set how long you want to save
-save_days=30
+# Atomic rotation for Nginx and all installed PHP-FPM instances.
+retention_days=${LNMP_LOG_RETENTION_DAYS:-30}
+case "${retention_days}" in
+    ''|*[!0-9]*) echo "Invalid LNMP_LOG_RETENTION_DAYS." >&2; exit 2 ;;
+esac
 
-############################################
-#Please do not modify the following script #
-############################################
-mkdir -p $log_files_dir
+install -d -m 0755 /run/lock
+exec 9>/run/lock/lnmp-logrotate.lock
+if command -v flock >/dev/null 2>&1; then
+    flock -n 9 || exit 0
+fi
+rotation_stamp=$(date +%Y%m%d)
 
-log_files_num=${#log_files_name[@]}
+rotate_service_logs()
+{
+    local log_dir=$1 pid_file=$2 archive_dir log_file relative safe_name target pid
+    [ -d "${log_dir}" ] || return 0
+    [ -r "${pid_file}" ] || return 0
+    pid=$(cat "${pid_file}" 2>/dev/null)
+    [[ "${pid}" =~ ^[0-9]+$ ]] || return 0
+    kill -0 "${pid}" 2>/dev/null || return 0
 
-#cut nginx log files
-for((i=0;i<$log_files_num;i++));do
-mv ${log_files_path}${log_files_name[i]}.log ${log_files_dir}/${log_files_name[i]}_$(date -d "yesterday" +"%Y%m%d").log
-done
+    archive_dir="${log_dir}/archive"
+    install -d -m 0750 "${archive_dir}"
+    while IFS= read -r -d '' log_file; do
+        [ -s "${log_file}" ] || continue
+        relative=${log_file#"${log_dir}"/}
+        safe_name=${relative//\//__}
+        target="${archive_dir}/${safe_name}.${rotation_stamp}"
+        [ -e "${target}" ] && target="${target}.$(date +%H%M%S)"
+        mv -- "${log_file}" "${target}"
+    done < <(find "${log_dir}" -type f -name '*.log' ! -path "${archive_dir}/*" -print0)
 
-#delete 30 days ago nginx log files
-find $log_files_path -mtime +$save_days -exec rm -rf {} \; 
+    # USR1 asks both Nginx and PHP-FPM masters to reopen logs without restart.
+    kill -USR1 "${pid}" 2>/dev/null || true
+    find "${archive_dir}" -type f ! -name '*.gz' -mtime +0 -exec gzip -9 -- {} \;
+    find "${archive_dir}" -type f -mtime "+${retention_days}" -delete
+}
 
-$nginx_sbin -s reload
+rotate_service_logs /usr/local/nginx/logs /usr/local/nginx/logs/nginx.pid
+while IFS= read -r -d '' php_dir; do
+    rotate_service_logs "${php_dir}/var/log" "${php_dir}/var/run/php-fpm.pid"
+done < <(find /usr/local -maxdepth 1 -type d -name 'php*' -print0 2>/dev/null)

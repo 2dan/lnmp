@@ -20,7 +20,7 @@
 ### END INIT INFO
 
 # Author:   licess
-# website:  https://lnmp.org
+# Independent hardened maintenance build
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 NAME=fail2ban

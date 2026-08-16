@@ -2,9 +2,10 @@
 
 Backup_MariaDB()
 {
+    umask 077
     echo "Starting backup all databases..."
     echo "If the database is large, the backup time will be longer."
-    /usr/local/mariadb/bin/mysqldump --defaults-file=~/.my.cnf --all-databases > /root/mariadb_all_backup${Upgrade_Date}.sql
+    /usr/local/mariadb/bin/mysqldump --defaults-file="${LNMP_MYCNF}" --all-databases --routines --events --triggers --hex-blob > "/root/mariadb_all_backup${Upgrade_Date}.sql"
     if [ $? -eq 0 ]; then
         echo "MariaDB databases backup successfully.";
     else
@@ -19,14 +20,12 @@ Backup_MariaDB()
     if [ "${MariaDB_Data_Dir}" != "/usr/local/mariadb/var" ]; then
         mv ${MariaDB_Data_Dir} ${MariaDB_Data_Dir}${Upgrade_Date}
     fi
-    if echo "${mariadb_version}" | grep -Eqi '^5.5.' &&  echo "${cur_mariadb_version}" | grep -Eqi '^10.';then
-        sed -i 's/STATS_PERSISTENT=0//g' /root/mariadb_all_backup${Upgrade_Date}.sql
-    fi
 }
 
 Upgrade_MariaDB()
 {
     Check_DB
+    Validate_Install_Path "${MariaDB_Data_Dir}" 'MariaDB data directory' || exit 1
     if [ "${Is_MySQL}" = "y" ]; then
         Echo_Red "Current database was MySQL, Can't run MariaDB upgrade script."
         exit 1
@@ -39,60 +38,28 @@ Upgrade_MariaDB()
     echo "Current MariaDB Version:${cur_mariadb_version}"
     echo "You can get version number from https://downloads.mariadb.org/"
     Echo_Yellow "Please enter MariaDB Version you want."
-    read -p "(example: 10.0.35 ): " mariadb_version
+    read -p "(example: 12.3.2): " mariadb_version
     if [ "${mariadb_version}" = "" ]; then
         echo "Error: You must input MariaDB Version!!"
         exit 1
     fi
-
-    if echo "${mariadb_version}" | grep -Eqi '^10.6.';then
-        if [[ "${DB_ARCH}" = "x86_64" ]]; then
-            read -p "Using Generic Binaries [y/n]: " Bin
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install mariadb-${mariadb_version} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install mariadb-${mariadb_version} from Source."
-                Bin="n"
-                ;;
-            *)
-                echo "You will install mariadb-${mariadb_version} Using Generic Binaries."
-                Bin="y"
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
-    else
-        if [[ "${DB_ARCH}" = "x86_64" || "${DB_ARCH}" = "i686" ]]; then
-            read -p "Using Generic Binaries [y/n]: " Bin
-            case "${Bin}" in
-            [yY][eE][sS]|[yY])
-                echo "You will install mariadb-${mariadb_version} Using Generic Binaries."
-                Bin="y"
-                ;;
-            [nN][oO]|[nN])
-                echo "You will install mariadb-${mariadb_version} from Source."
-                Bin="n"
-                ;;
-            *)
-                echo "You will install mariadb-${mariadb_version} Using Generic Binaries."
-                Bin="y"
-                ;;
-            esac
-        else
-            Bin="n"
-        fi
+    if ! echo "${mariadb_version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        Echo_Red "Error: invalid MariaDB version format."
+        exit 1
     fi
+    case "${mariadb_version}" in
+        10.6.*|10.11.*|11.4.*|11.8.*|12.3.*) ;;
+        *) Echo_Red "Supported MariaDB upgrade branches are 10.6, 10.11, 11.4, 11.8 and 12.3."; exit 1 ;;
+    esac
+
+    Select_Database_Package_Mode mariadb "${mariadb_version}" "${DB_Install_Mode:-auto}" || exit 1
 
     #do you want to install the InnoDB Storage Engine?
     echo "==========================="
 
     InstallInnodb="y"
-    Echo_Yellow "Do you want to install the InnoDB Storage Engine?"
-    read -p "(Default yes, if you want please enter: y , if not please enter: n): " InstallInnodb
+    Echo_Yellow "Tune both InnoDB and MyISAM? Choose n for MyISAM-only tuning (InnoDB remains available)."
+    read -r -p "(Default y): " InstallInnodb
 
     case "${InstallInnodb}" in
     [yY][eE][sS]|[yY])
@@ -100,7 +67,7 @@ Upgrade_MariaDB()
         InstallInnodb="y"
         ;;
     [nN][oO]|[nN])
-        echo "You will NOT install the InnoDB Storage Engine!"
+        echo "MyISAM-only tuning selected; InnoDB remains available for system and existing tables."
         InstallInnodb="n"
         ;;
     *)
@@ -112,14 +79,6 @@ Upgrade_MariaDB()
     echo "You will upgrade MariaDB V${cur_mariadb_version} to V${mariadb_version}"
     echo "====================================================================="
 
-    if [ -s /usr/local/include/jemalloc/jemalloc.h ] && lsof -n|grep "libjemalloc.so"|grep -q "mysqld"; then
-        MariaDBMAOpt=''
-    elif [ -s /usr/local/include/gperftools/tcmalloc.h ] && lsof -n|grep "libtcmalloc.so"|grep -q "mysqld"; then
-        MariaDBMAOpt="-DCMAKE_EXE_LINKER_FLAGS='-ltcmalloc' -DWITH_SAFEMALLOC=OFF"
-    else
-        MariaDBMAOpt=''
-    fi
-
     Press_Start
 
     echo "============================check files=================================="
@@ -129,67 +88,14 @@ Upgrade_MariaDB()
     else
         MariaDB_FileName="mariadb-${mariadb_version}"
     fi
-    if [ -s ${MariaDB_FileName}.tar.gz ]; then
-        echo "${MariaDB_FileName}.tar.gz [found]"
+    if [ "${Bin}" = "y" ]; then
+        mariadb_url="https://archive.mariadb.org/mariadb-${mariadb_version}/bintar-linux-systemd-x86_64/${MariaDB_FileName}.tar.gz"
     else
-        echo "Notice: ${MariaDB_FileName}.tar.gz not found!!!download now......"
-        if [ "${Bin}" = "y" ]; then
-            if [ "${country}" = "CN" ]; then
-                Download_Files https://mirrors.ustc.edu.cn/mariadb/mariadb-${mariadb_version}/bintar-linux-systemd-x86_64/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                if [ $? -eq 0 ]; then
-                    echo "Download ${MariaDB_FileName}.tar.gz successfully!"
-                else
-                    Download_Files https://archive.mariadb.org/mariadb-${mariadb_version}/bintar-linux-systemd-x86_64/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                    if [ $? -ne 0 ]; then
-                        echo "You enter MariaDB Version was:"${mariadb_version}
-                        Echo_Red "Error! You entered a wrong version number or can't download from mariadb mirror, please check!"
-                        sleep 5
-                        exit 1
-                    fi
-                fi
-            else
-                Download_Files https://downloads.mariadb.org/rest-api/mariadb/${mariadb_version}/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                if [ $? -eq 0 ]; then
-                    echo "Download ${MariaDB_FileName}.tar.gz successfully!"
-                else
-                    Download_Files https://archive.mariadb.org/mariadb-${mariadb_version}/bintar-linux-systemd-x86_64/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                    if [ $? -ne 0 ]; then
-                        echo "You enter MariaDB Version was:"${mariadb_version}
-                        Echo_Red "Error! You entered a wrong version number or can't download from mariadb mirror, please check!"
-                        sleep 5
-                        exit 1
-                    fi
-                fi
-            fi
-        else
-            if [ "${country}" = "CN" ]; then
-                Download_Files https://mirrors.ustc.edu.cn/mariadb/mariadb-${mariadb_version}/source/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                if [ $? -eq 0 ]; then
-                    echo "Download ${MariaDB_FileName}.tar.gz successfully!"
-                else
-                    Download_Files https://archive.mariadb.org/mariadb-${mariadb_version}/source/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                    if [ $? -ne 0 ]; then
-                        echo "You enter MariaDB Version was:"${mariadb_version}
-                        Echo_Red "Error! You entered a wrong version number or can't download from mariadb mirror, please check!"
-                        sleep 5
-                        exit 1
-                    fi
-                fi
-            else
-                Download_Files https://downloads.mariadb.org/rest-api/mariadb/${mariadb_version}/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                if [ $? -eq 0 ]; then
-                    echo "Download ${MariaDB_FileName}.tar.gz successfully!"
-                else
-                    Download_Files https://archive.mariadb.org/mariadb-${mariadb_version}/source/${MariaDB_FileName}.tar.gz ${MariaDB_FileName}.tar.gz
-                    if [ $? -ne 0 ]; then
-                        echo "You enter MariaDB Version was:"${mariadb_version}
-                        Echo_Red "Error! You entered a wrong version number or can't download from mariadb mirror, please check!"
-                        sleep 5
-                        exit 1
-                    fi
-                fi
-            fi
-        fi
+        mariadb_url="https://archive.mariadb.org/mariadb-${mariadb_version}/source/${MariaDB_FileName}.tar.gz"
+    fi
+    if ! Download_Files "${mariadb_url}" "${MariaDB_FileName}.tar.gz" publisher-tls; then
+        Echo_Red "Error: invalid version or publisher download failed."
+        exit 1
     fi
     echo "============================check files=================================="
 
@@ -197,23 +103,14 @@ Upgrade_MariaDB()
 
     if [ "${Bin}" = "y" ]; then
         Echo_Blue "[+] Starting upgrade mariadb-${mariadb_version} Using Generic Binaries..."
-        Tar_Cd ${MariaDB_FileName}.tar.gz
+        Tar_Cd "${MariaDB_FileName}.tar.gz" "${MariaDB_FileName}" || exit 1
         mkdir /usr/local/mariadb
         mv ${MariaDB_FileName}/* /usr/local/mariadb/
     else
         Echo_Blue "[+] Starting upgrade mariadb-${mariadb_version} Using Source code..."
-        Tar_Cd mariadb-${mariadb_version}.tar.gz mariadb-${mariadb_version}
+        Tar_Cd "mariadb-${mariadb_version}.tar.gz" "mariadb-${mariadb_version}" || exit 1
         MariaDB_WITHSSL
-        if echo "${mariadb_version}" | grep -Eqi '^10.[5-9]|1[01].';then
-            cmake -DCMAKE_INSTALL_PREFIX=/usr/local/mariadb -DMYSQL_UNIX_ADDR=/tmp/mysql.sock -DEXTRA_CHARSETS=all -DDEFAULT_CHARSET=utf8mb4 -DDEFAULT_COLLATION=utf8mb4_general_ci -DWITH_READLINE=1 -DWITH_EMBEDDED_SERVER=1 -DENABLED_LOCAL_INFILE=1 -DWITHOUT_TOKUDB=1
-        elif echo "${mariadb_version}" | grep -Eqi '^10.4.';then
-            patch -p1 < ${cur_dir}/src/patch/mariadb_10.4_install_db.patch
-            cmake -DCMAKE_INSTALL_PREFIX=/usr/local/mariadb -DMYSQL_UNIX_ADDR=/tmp/mysql.sock -DEXTRA_CHARSETS=all -DDEFAULT_CHARSET=utf8mb4 -DDEFAULT_COLLATION=utf8mb4_general_ci -DWITH_READLINE=1 -DWITH_EMBEDDED_SERVER=1 -DENABLED_LOCAL_INFILE=1 -DWITHOUT_TOKUDB=1
-        elif echo "${mariadb_version}" | grep -Eqi '^10.[123].';then
-            cmake -DCMAKE_INSTALL_PREFIX=/usr/local/mariadb -DWITH_ARIA_STORAGE_ENGINE=1 -DWITH_XTRADB_STORAGE_ENGINE=1 -DWITH_INNOBASE_STORAGE_ENGINE=1 -DWITH_PARTITION_STORAGE_ENGINE=1 -DWITH_MYISAM_STORAGE_ENGINE=1 -DWITH_FEDERATED_STORAGE_ENGINE=1 -DEXTRA_CHARSETS=all -DDEFAULT_CHARSET=utf8mb4 -DDEFAULT_COLLATION=utf8mb4_general_ci -DWITH_READLINE=1 -DWITH_EMBEDDED_SERVER=1 -DENABLED_LOCAL_INFILE=1 -DWITHOUT_TOKUDB=1 ${MariaDBWITHSSL}
-        else
-            cmake -DCMAKE_INSTALL_PREFIX=/usr/local/mariadb -DWITH_ARIA_STORAGE_ENGINE=1 -DWITH_XTRADB_STORAGE_ENGINE=1 -DWITH_INNOBASE_STORAGE_ENGINE=1 -DWITH_PARTITION_STORAGE_ENGINE=1 -DWITH_MYISAM_STORAGE_ENGINE=1 -DWITH_FEDERATED_STORAGE_ENGINE=1 -DEXTRA_CHARSETS=all -DDEFAULT_CHARSET=utf8mb4 -DDEFAULT_COLLATION=utf8mb4_general_ci -DWITH_READLINE=1 -DWITH_EMBEDDED_SERVER=1 -DENABLED_LOCAL_INFILE=1 ${MariaDBWITHSSL}
-        fi
+        cmake -DCMAKE_INSTALL_PREFIX=/usr/local/mariadb -DMYSQL_UNIX_ADDR=/run/mysqld/mysqld.sock -DEXTRA_CHARSETS=all -DDEFAULT_CHARSET=utf8mb4 -DDEFAULT_COLLATION=utf8mb4_general_ci -DWITH_READLINE=1 -DENABLED_LOCAL_INFILE=OFF -DWITHOUT_TOKUDB=1
         Make_Install
     fi
 
@@ -224,14 +121,17 @@ cat > /etc/my.cnf<<EOF
 [client]
 #password	= your_password
 port		= 3306
-socket		= /tmp/mysql.sock
+socket		= /run/mysqld/mysqld.sock
 
 [mysqld]
 port		= 3306
-socket		= /tmp/mysql.sock
+socket		= /run/mysqld/mysqld.sock
 user    = mariadb
 basedir = /usr/local/mariadb
 datadir = ${MariaDB_Data_Dir}
+bind_address = 127.0.0.1
+skip_name_resolve = ON
+local_infile = OFF
 log_error = ${MariaDB_Data_Dir}/mariadb.err
 pid-file = ${MariaDB_Data_Dir}/mariadb.pid
 skip-external-locking
@@ -290,17 +190,17 @@ EOF
         sed -i 's/^#innodb/innodb/g' /etc/my.cnf
     else
         sed -i '/^default_storage_engine/d' /etc/my.cnf
-        sed -i '/skip-external-locking/i\default_storage_engine = MyISAM\nloose-skip-innodb' /etc/my.cnf
+        sed -i '/skip-external-locking/i\default_storage_engine = MyISAM' /etc/my.cnf
     fi
     MySQL_Opt
     if [ -d "${MariaDB_Data_Dir}" ]; then
-        rm -rf ${MariaDB_Data_Dir}/*
+        rm -rf -- "${MariaDB_Data_Dir:?}"/*
     else
-        mkdir -p ${MariaDB_Data_Dir}
+        mkdir -p -- "${MariaDB_Data_Dir}"
     fi
     chown -R mariadb:mariadb /usr/local/mariadb
-    /usr/local/mariadb/scripts/mysql_install_db --defaults-file=/etc/my.cnf --basedir=/usr/local/mariadb --datadir=${MariaDB_Data_Dir} --user=mariadb
-    chown -R mariadb:mariadb ${MariaDB_Data_Dir}
+    Initialize_MariaDB_Data_Dir || return 1
+    chown -R mariadb:mariadb -- "${MariaDB_Data_Dir}"
     \cp /usr/local/mariadb/support-files/mysql.server /etc/init.d/mariadb
     chmod 755 /etc/init.d/mariadb
 
@@ -308,13 +208,17 @@ EOF
     /etc/init.d/mariadb start
 
     echo "Restore backup databases..."
-    /usr/local/mariadb/bin/mysql --defaults-file=~/.my.cnf < /root/mariadb_all_backup${Upgrade_Date}.sql
+    if ! /usr/local/mariadb/bin/mysql --defaults-file="${LNMP_MYCNF}" < "/root/mariadb_all_backup${Upgrade_Date}.sql"; then
+        Echo_Red "Database restore failed; the backup and previous installation were preserved."
+        return 1
+    fi
     echo "Repair databases..."
-    /usr/local/mariadb/bin/mysql_upgrade -u root -p${DB_Root_Password}
+    /usr/local/mariadb/bin/mysql_upgrade --defaults-file="${LNMP_MYCNF}" || return 1
 
     /etc/init.d/mariadb stop
     TempMycnf_Clean
-    cd ${cur_dir} && rm -rf ${cur_dir}/src/mariadb-${mariadb_version}
+    cd "${cur_dir}" || return 1
+    rm -rf -- "${cur_dir}/src/mariadb-${mariadb_version}"
 
     lnmp start
     if [[ -s /usr/local/mariadb/bin/mysql && -s /usr/local/mariadb/bin/mysqld_safe && -s /etc/my.cnf ]]; then

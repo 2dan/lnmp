@@ -4,9 +4,26 @@ After=network.target
 
 [Service]
 Type=forking
+User=redis
+Group=redis
+RuntimeDirectory=redis
+RuntimeDirectoryMode=0750
+PIDFile=/run/redis/redis.pid
 ExecStart=/usr/local/redis/bin/redis-server /usr/local/redis/etc/redis.conf
-ExecStop=/usr/local/redis/bin/redis-cli shutdown
-PrivateTmp=false
+ExecStop=/usr/local/redis/bin/redis-cli -h 127.0.0.1 shutdown
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/redis /var/log/redis /run/redis
 
 [Install]
 WantedBy=multi-user.target

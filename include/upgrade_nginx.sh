@@ -4,13 +4,7 @@ Upgrade_Nginx()
 {
     Cur_Nginx_Version=`/usr/local/nginx/sbin/nginx -v 2>&1 | cut -c22-`
 
-    if [ -s /usr/local/include/jemalloc/jemalloc.h ] && /usr/local/nginx/sbin/nginx -V 2>&1|grep -Eqi 'ljemalloc'; then
-        NginxMAOpt="--with-ld-opt='-ljemalloc'"
-    elif [ -s /usr/local/include/gperftools/tcmalloc.h ] && grep -Eqi "google_perftools_profiles" /usr/local/nginx/conf/nginx.conf; then
-        NginxMAOpt='--with-google_perftools_module'
-    else
-        NginxMAOpt=""
-    fi
+    NginxMAOpt=""
 
     Nginx_Version=""
     echo "Current Nginx Version:${Cur_Nginx_Version}"
@@ -18,6 +12,14 @@ Upgrade_Nginx()
     read -p "Please enter nginx version you want, (example: 1.20.2): " Nginx_Version
     if [ "${Nginx_Version}" = "" ]; then
         echo "Error: You must enter a nginx version!!"
+        exit 1
+    fi
+    if ! echo "${Nginx_Version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        Echo_Red "Error: invalid Nginx version format."
+        exit 1
+    fi
+    if [ "$(printf '%s\n' "${Nginx_Version}" 1.26.0 | sort -V | head -n1)" != 1.26.0 ]; then
+        Echo_Red "Nginx 1.26.0 is the minimum supported upgrade target."
         exit 1
     fi
     echo "+---------------------------------------------------------+"
@@ -28,19 +30,9 @@ Upgrade_Nginx()
 
     echo "============================check files=================================="
     cd ${cur_dir}/src
-    if [ -s nginx-${Nginx_Version}.tar.gz ]; then
-        echo "nginx-${Nginx_Version}.tar.gz [found]"
-    else
-        echo "Notice: nginx-${Nginx_Version}.tar.gz not found!!!download now......"
-        wget -c --progress=dot:giga https://nginx.org/download/nginx-${Nginx_Version}.tar.gz
-        if [ $? -eq 0 ]; then
-            echo "Download nginx-${Nginx_Version}.tar.gz successfully!"
-        else
-            echo "You enter Nginx Version was:"${Nginx_Version}
-            Echo_Red "Error! You entered a wrong version number, please check!"
-            sleep 5
-            exit 1
-        fi
+    if ! Download_Files "https://nginx.org/download/nginx-${Nginx_Version}.tar.gz" "nginx-${Nginx_Version}.tar.gz" publisher-tls; then
+        Echo_Red "Error: invalid Nginx version or publisher download failed."
+        exit 1
     fi
     echo "============================check files=================================="
 
@@ -57,12 +49,7 @@ Upgrade_Nginx()
     if gcc -dumpversion|grep -q "^[8]" && [ "${Nginx_Ver_Com}" == "1" ]; then
         patch -p1 < ${cur_dir}/src/patch/nginx-gcc8.patch
     fi
-    Nginx_Ver_Com=$(${cur_dir}/include/version_compare 1.9.4 ${Nginx_Version})
-    if [[ "${Nginx_Ver_Com}" == "0" ||  "${Nginx_Ver_Com}" == "1" ]]; then
-        ./configure --user=www --group=www --prefix=/usr/local/nginx --with-http_stub_status_module --with-http_ssl_module --with-http_spdy_module --with-http_gzip_static_module --with-ipv6 --with-http_sub_module --with-http_realip_module ${Nginx_With_Openssl} ${Nginx_With_Pcre} ${Nginx_Module_Lua} ${NginxMAOpt} ${Ngx_FancyIndex} ${Nginx_Modules_Options}
-    else
-        ./configure --user=www --group=www --prefix=/usr/local/nginx --with-http_stub_status_module --with-http_ssl_module --with-http_v2_module --with-http_v3_module --with-http_gzip_static_module --with-http_sub_module --with-stream --with-stream_ssl_module --with-stream_ssl_preread_module --with-http_realip_module ${Nginx_With_Openssl} ${Nginx_With_Pcre} ${Nginx_Module_Lua} ${NginxMAOpt} ${Ngx_FancyIndex} ${Nginx_Modules_Options}
-    fi
+    ./configure --user=www --group=www --prefix=/usr/local/nginx --with-http_stub_status_module --with-http_ssl_module --with-http_v2_module --with-http_v3_module --with-http_gzip_static_module --with-http_sub_module --with-stream --with-stream_ssl_module --with-stream_ssl_preread_module --with-http_realip_module ${Nginx_With_Openssl} ${Nginx_With_Pcre} ${Nginx_Module_Lua} ${NginxMAOpt} ${Ngx_FancyIndex} ${Nginx_Modules_Options}
     make -j `grep 'processor' /proc/cpuinfo | wc -l`
     if [ $? -ne 0 ]; then
         make
@@ -75,7 +62,8 @@ Upgrade_Nginx()
     echo "upgrade..."
     make upgrade
 
-    cd ${cur_dir} && rm -rf ${cur_dir}/src/nginx-${Nginx_Version}
+    cd "${cur_dir}" || return 1
+    rm -rf -- "${cur_dir}/src/nginx-${Nginx_Version}"
     if [ "${Enable_Nginx_Lua}" = 'y' ]; then
         if ! grep -q 'lua_package_path "/usr/local/nginx/lib/lua/?.lua";' /usr/local/nginx/conf/nginx.conf; then
             sed -i "/server_tokens off;/i\        lua_package_path \"/usr/local/nginx/lib/lua/?.lua\";\n" /usr/local/nginx/conf/nginx.conf

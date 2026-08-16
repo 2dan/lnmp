@@ -13,7 +13,7 @@ echo "|     Remove PHP disable functions for LNMP, Written by Licess      |"
 echo "+-------------------------------------------------------------------+"
 echo "|         A tool to remove PHP disable_functions for LNMP           |"
 echo "+-------------------------------------------------------------------+"
-echo "|        For more information please visit https://lnmp.org         |"
+echo "|         Independent hardened maintenance build                   |"
 echo "+-------------------------------------------------------------------+"
 echo "|             Usage: ./remove_disable_function.sh                   |"
 echo "+-------------------------------------------------------------------+"
@@ -75,13 +75,8 @@ elif [ "$ver" = "3" ]; then
     remove_exec_function
 fi
 
-if [ -s /etc/init.d/httpd ] && [ -s /usr/local/apache ]; then
-echo "Restarting Apache......"
-/etc/init.d/httpd -k restart
-else
 echo "Restarting php-fpm......"
 /etc/init.d/php-fpm restart
-fi
 
 echo "+-------------------------------------------------+"
 echo "| Remove php disable funtion completed,enjoy it!  |"

@@ -8,25 +8,21 @@ if [ $(id -u) != "0" ]; then
 fi
 
 cur_dir=$(pwd)
-Stack=$1
-if [ "${Stack}" = "" ]; then
-    Stack="lnmp"
-else
-    Stack=$1
-fi
+action=${1:-lnmp}
 
-LNMP_Ver='2.1'
+LNMP_Ver='2.3-hardened'
 . lnmp.conf
+. include/version.sh
 . include/main.sh
 . include/init.sh
 . include/mysql.sh
 . include/mariadb.sh
 . include/php.sh
 . include/nginx.sh
-. include/apache.sh
 . include/end.sh
 . include/only.sh
 . include/multiplephp.sh
+. include/tuning.sh
 
 Get_Dist_Name
 
@@ -35,7 +31,7 @@ if [ "${DISTRO}" = "unknow" ]; then
     exit 1
 fi
 
-if [[ "${Stack}" = "lnmp" || "${Stack}" = "lnmpa" || "${Stack}" = "lamp" ]]; then
+if [ "${action}" = "lnmp" ]; then
     if [ -f /bin/lnmp ]; then
         Echo_Red "You have installed LNMP!"
         echo -e "If you want to reinstall LNMP, please BACKUP your data.\nand run uninstall script: ./uninstall.sh before you install."
@@ -49,9 +45,9 @@ clear
 echo "+------------------------------------------------------------------------+"
 echo "|          LNMP V${LNMP_Ver} for ${DISTRO} Linux Server, Written by Licess          |"
 echo "+------------------------------------------------------------------------+"
-echo "|        A tool to auto-compile & install LNMP/LNMPA/LAMP on Linux       |"
+echo "|             A tool to compile and install LNMP on Linux               |"
 echo "+------------------------------------------------------------------------+"
-echo "|           For more information please visit https://lnmp.org           |"
+echo "|              Independent hardened maintenance build                    |"
 echo "+------------------------------------------------------------------------+"
 
 Init_Install()
@@ -60,7 +56,7 @@ Init_Install()
     Print_APP_Ver
     Get_Dist_Version
     Print_Sys_Info
-    Check_Hosts
+    Check_Hosts || exit 1
     Check_CMPT
     if [ "${CheckMirror}" != "n" ]; then
         Modify_Source
@@ -69,54 +65,33 @@ Init_Install()
     Set_Timezone
     if [ "$PM" = "yum" ]; then
         CentOS_InstallNTP
-        CentOS_RemoveAMP
+        CentOS_Remove_Conflicting_Packages
         CentOS_Dependent
     elif [ "$PM" = "apt" ]; then
         Deb_InstallNTP
         Xen_Hwcap_Setting
-        Deb_RemoveAMP
+        Deb_Remove_Conflicting_Packages
         Deb_Dependent
     fi
     Disable_Selinux
     Check_Download
     Install_Libiconv
-    Install_Libmcrypt
-    Install_Mhash
-    Install_Mcrypt
     Install_Freetype
     Install_Pcre
-    Install_Icu4c
-    if [ "${SelectMalloc}" = "2" ]; then
-        Install_Jemalloc
-    elif [ "${SelectMalloc}" = "3" ]; then
-        Install_TCMalloc
-    fi
     if [ "$PM" = "yum" ]; then
         CentOS_Lib_Opt
     elif [ "$PM" = "apt" ]; then
         Deb_Lib_Opt
     fi
-    if [ "${DBSelect}" = "1" ]; then
-        Install_MySQL_51
-    elif [ "${DBSelect}" = "2" ]; then
-        Install_MySQL_55
-    elif [ "${DBSelect}" = "3" ]; then
-        Install_MySQL_56
-    elif [ "${DBSelect}" = "4" ]; then
+    if [ "${DBSelect}" = "4" ]; then
         Install_MySQL_57
     elif [ "${DBSelect}" = "5" ]; then
         Install_MySQL_80
     elif [ "${DBSelect}" = "6" ]; then
         Install_MySQL_84
     elif [ "${DBSelect}" = "7" ]; then
-        Install_MariaDB_5
-    elif [ "${DBSelect}" = "8" ]; then
-        Install_MariaDB_103
-    elif [ "${DBSelect}" = "9" ]; then
-        Install_MariaDB_104
-    elif [ "${DBSelect}" = "10" ]; then
-        Install_MariaDB_105
-    elif [ "${DBSelect}" = "11" ]; then
+        Install_MySQL_84
+    elif [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
         Install_MariaDB_106
     fi
     TempMycnf_Clean
@@ -126,25 +101,7 @@ Init_Install()
 
 Install_PHP()
 {
-    if [ "${PHPSelect}" = "1" ]; then
-        Install_PHP_52
-    elif [ "${PHPSelect}" = "2" ]; then
-        Install_PHP_53
-    elif [ "${PHPSelect}" = "3" ]; then
-        Install_PHP_54
-    elif [ "${PHPSelect}" = "4" ]; then
-        Install_PHP_55
-    elif [ "${PHPSelect}" = "5" ]; then
-        Install_PHP_56
-    elif [ "${PHPSelect}" = "6" ]; then
-        Install_PHP_7
-    elif [ "${PHPSelect}" = "7" ]; then
-        Install_PHP_71
-    elif [ "${PHPSelect}" = "8" ]; then
-        Install_PHP_72
-    elif [ "${PHPSelect}" = "9" ]; then
-        Install_PHP_73
-    elif [ "${PHPSelect}" = "10" ]; then
+    if [ "${PHPSelect}" = "10" ]; then
         Install_PHP_74
     elif [ "${PHPSelect}" = "11" ]; then
         Install_PHP_80
@@ -154,6 +111,10 @@ Install_PHP()
         Install_PHP_82
     elif [ "${PHPSelect}" = "14" ]; then
         Install_PHP_83
+    elif [ "${PHPSelect}" = "15" ]; then
+        Install_PHP_84
+    elif [ "${PHPSelect}" = "16" ]; then
+        Install_PHP_85
     fi
     Clean_PHP_Src_Dir
 }
@@ -164,57 +125,17 @@ LNMP_Stack()
     Install_PHP
     LNMP_PHP_Opt
     Install_Nginx
+    Apply_Runtime_Tuning
     Creat_PHP_Tools
     Add_Iptables_Rules
     Add_LNMP_Startup
     Check_LNMP_Install
 }
 
-LNMPA_Stack()
-{
-    Apache_Selection
-    Init_Install
-    if [ "${ApacheSelect}" = "1" ]; then
-        Install_Apache_22
-    else
-        Install_Apache_24
-    fi
-    Install_PHP
-    Install_Nginx
-    Creat_PHP_Tools
-    Add_Iptables_Rules
-    Add_LNMPA_Startup
-    Check_LNMPA_Install
-}
-
-LAMP_Stack()
-{
-    Apache_Selection
-    Init_Install
-    if [ "${ApacheSelect}" = "1" ]; then
-        Install_Apache_22
-    else
-        Install_Apache_24
-    fi
-    Install_PHP
-    Creat_PHP_Tools
-    Add_Iptables_Rules
-    Add_LAMP_Startup
-    Check_LAMP_Install
-}
-
-case "${Stack}" in
+case "${action}" in
     lnmp)
         Dispaly_Selection
         LNMP_Stack 2>&1 | tee /root/lnmp-install.log
-        ;;
-    lnmpa)
-        Dispaly_Selection
-        LNMPA_Stack 2>&1 | tee /root/lnmp-install.log
-        ;;
-    lamp)
-        Dispaly_Selection
-        LAMP_Stack 2>&1 | tee /root/lnmp-install.log
         ;;
     nginx)
         Install_Only_Nginx 2>&1 | tee /root/nginx-install.log
@@ -226,8 +147,7 @@ case "${Stack}" in
         Install_Multiplephp
         ;;
     *)
-        Echo_Red "Usage: $0 {lnmp|lnmpa|lamp}"
-        Echo_Red "Usage: $0 {nginx|db|mphp}"
+        Echo_Red "Usage: $0 {lnmp|nginx|db|mphp}"
         ;;
 esac
 

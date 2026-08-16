@@ -3,8 +3,6 @@
 Nginx_Dependent()
 {
     if [ "$PM" = "yum" ]; then
-        rpm -e httpd httpd-tools --nodeps
-        yum -y remove httpd*
         for packages in make gcc gcc-c++ gcc-g77 wget crontabs zlib zlib-devel openssl openssl-devel perl patch bzip2 initscripts xz gzip;
         do yum -y install $packages; done
         if [ "${DISTRO}" = "Fedora" ] || echo "${CentOS_Version}" | grep -Eqi "^9"; then
@@ -14,9 +12,6 @@ Nginx_Dependent()
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y
         [[ $? -ne 0 ]] && apt-get update --allow-releaseinfo-change -y
-        dpkg -P apache2 apache2-doc apache2-mpm-prefork apache2-utils apache2.2-common
-        for removepackages in apache2 apache2-doc apache2-utils apache2.2-common apache2.2-bin apache2-mpm-prefork apache2-doc apache2-mpm-worker;
-        do apt-get purge -y $removepackages; done
         for packages in debian-keyring debian-archive-keyring build-essential gcc g++ make autoconf automake wget cron openssl libssl-dev zlib1g zlib1g-dev bzip2 xz-utils gzip;
         do apt-get --no-install-recommends install -y $packages; done
     fi
@@ -30,16 +25,15 @@ Install_Only_Nginx()
     echo "+-----------------------------------------------------------------------+"
     echo "|                     A tool to only install Nginx.                     |"
     echo "+-----------------------------------------------------------------------+"
-    echo "|           For more information please visit https://lnmp.org          |"
+    echo "|              Independent hardened maintenance build                   |"
     echo "+-----------------------------------------------------------------------+"
     Press_Install
     Echo_Blue "Install dependent packages..."
-    cd ${cur_dir}/src
+    cd "${cur_dir}/src" || return 1
     Get_Dist_Version
     Modify_Source
     Nginx_Dependent
     cd ${cur_dir}/src
-    Download_Files https://sourceforge.net/projects/pcre/files/pcre/8.45/${Pcre_Ver}.tar.bz2 ${Pcre_Ver}.tar.bz2
     Install_Pcre
     if [ `grep -L '/usr/local/lib'    '/etc/ld.so.conf'` ]; then
         echo "/usr/local/lib" >> /etc/ld.so.conf
@@ -48,13 +42,12 @@ Install_Only_Nginx()
     Download_Files https://nginx.org/download/${Nginx_Ver}.tar.gz ${Nginx_Ver}.tar.gz
     Install_Nginx
     StartUp nginx
-    rm -rf ${cur_dir}/src/${Nginx_Ver}
-    [[ -d "${cur_dir}/src/${Openssl_Ver}" ]] && rm -rf ${cur_dir}/src/${Openssl_Ver}
-    [[ -d "${cur_dir}/src/${Openssl_New_Ver}" ]] && rm -rf ${cur_dir}/src/${Openssl_New_Ver}
+    rm -rf -- "${cur_dir}/src/${Nginx_Ver}"
+    [[ -d "${cur_dir}/src/${Openssl_New_Ver}" ]] && rm -rf -- "${cur_dir}/src/${Openssl_New_Ver}"
     StartOrStop start nginx
     Add_Iptables_Rules
-    \cp ${cur_dir}/conf/index.html ${Default_Website_Dir}/index.html
-    \cp ${cur_dir}/conf/lnmp /bin/lnmp
+    \cp "${cur_dir}/conf/index.html" "${Default_Website_Dir}/index.html"
+    \cp "${cur_dir}/conf/lnmp" /bin/lnmp
     Check_Nginx_Files
 }
 
@@ -117,7 +110,7 @@ DB_Dependent()
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y
         [[ $? -ne 0 ]] && apt-get update --allow-releaseinfo-change -y
-        for removepackages in mysql-client mysql-server mysql-common mysql-server-core-5.5 mysql-client-5.5 mariadb-client mariadb-server mariadb-common;
+        for removepackages in mysql-client mysql-server mysql-common mariadb-client mariadb-server mariadb-common;
         do apt-get purge -y $removepackages; done
         dpkg -l |grep mysql
         dpkg -P mysql-server mysql-common libmysqlclient15off libmysqlclient15-dev
@@ -131,8 +124,8 @@ Install_Database()
 {
     echo "============================check files=================================="
     cd ${cur_dir}/src
-    if [[ "${DBSelect}" =~ ^[123456]$ ]]; then
-        if [[ "${Bin}" = "y" && "${DBSelect}" =~ ^[2-4]$ ]]; then
+    if [[ "${DBSelect}" =~ ^[4-7]$ ]]; then
+        if [[ "${Bin}" = "y" && "${DBSelect}" = "4" ]]; then
             Mysql_Ver_Short=$(echo ${Mysql_Ver} | sed 's/mysql-//' | cut -d. -f1-2)
             Download_Files https://cdn.mysql.com/Downloads/MySQL-${Mysql_Ver_Short}/${Mysql_Ver}-linux-glibc2.12-${DB_ARCH}.tar.gz ${Mysql_Ver}-linux-glibc2.12-${DB_ARCH}.tar.gz
             if [ $? -ne 0 ]; then
@@ -144,7 +137,7 @@ Install_Database()
                 exit 1
             fi
         elif [[ "${Bin}" = "y" && "${DBSelect}" = "5" ]]; then
-            [[ "${DB_ARCH}" = "aarch64" ]] && mysql8_glibc_ver="2.17" || mysql8_glibc_ver="2.12"
+            mysql8_glibc_ver="2.28"
             Download_Files https://cdn.mysql.com/Downloads/MySQL-8.0/${Mysql_Ver}-linux-glibc${mysql8_glibc_ver}-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc${mysql8_glibc_ver}-${DB_ARCH}.tar.xz
             if [ $? -ne 0 ]; then
                 Download_Files https://cdn.mysql.com/archives/mysql-8.0/${Mysql_Ver}-linux-glibc${mysql8_glibc_ver}-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc${mysql8_glibc_ver}-${DB_ARCH}.tar.xz
@@ -155,11 +148,18 @@ Install_Database()
                 exit 1
             fi
         elif [[ "${Bin}" = "y" && "${DBSelect}" = "6" ]]; then
-            Download_Files https://cdn.mysql.com/Downloads/MySQL-8.4/${Mysql_Ver}-linux-glibc2.17-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc2.17-${DB_ARCH}.tar.xz
-            [[ $? -ne 0 ]] && Download_Files https://cdn.mysql.com/archives/mysql-8.4/${Mysql_Ver}-linux-glibc2.17-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc2.17-${DB_ARCH}.tar.xz
-            if [ ! -s ${Mysql_Ver}-linux-glibc2.17-${DB_ARCH}.tar.xz ]; then
+            Download_Files https://cdn.mysql.com/Downloads/MySQL-8.4/${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz
+            [[ $? -ne 0 ]] && Download_Files https://cdn.mysql.com/archives/mysql-8.4/${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz
+            if [ ! -s ${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz ]; then
                 Echo_Red "Error! Unable to download MySQL 8.4 Generic Binaries, please download it to src directory manually."
                 sleep 5
+                exit 1
+            fi
+        elif [[ "${Bin}" = "y" && "${DBSelect}" = "7" ]]; then
+            Download_Files https://cdn.mysql.com/Downloads/MySQL-9.7/${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz
+            [[ $? -ne 0 ]] && Download_Files https://cdn.mysql.com/archives/mysql-9.7/${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz ${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz
+            if [ ! -s ${Mysql_Ver}-linux-glibc2.28-${DB_ARCH}.tar.xz ]; then
+                Echo_Red "Error! Unable to download MySQL 9.7 Generic Binaries."
                 exit 1
             fi
         else
@@ -174,29 +174,28 @@ Install_Database()
                 exit 1
             fi
         fi
-    elif [[ "${DBSelect}" =~ ^[789]|1[0-1]$ ]]; then
-        Mariadb_Version_Short=$(echo ${Mariadb_Ver} | cut -d- -f2)
+    elif [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
         if [ "${Bin}" = "y" ]; then
             MariaDB_FileName="${Mariadb_Ver}-linux-systemd-${DB_ARCH}"
             if [ "${country}" = "CN" ]; then
-                Download_Files https://mirrors.ustc.edu.cn/mariadb/${Mariadb_Ver}/bintar-linux-systemd-x86_64/${Mariadb_Ver}-linux-systemd-x86_64.tar.gz ${Mariadb_Ver}-linux-systemd-x86_64.tar.gz
+                Download_Files https://archive.mariadb.org/${Mariadb_Ver}/bintar-linux-systemd-x86_64/${Mariadb_Ver}-linux-systemd-x86_64.tar.gz ${Mariadb_Ver}-linux-systemd-x86_64.tar.gz
                 if [ $? -ne 0 ]; then
                     Download_Files https://archive.mariadb.org/${Mariadb_Ver}/bintar-linux-systemd-x86_64/${Mariadb_Ver}-linux-systemd-x86_64.tar.gz ${Mariadb_Ver}-linux-systemd-x86_64.tar.gz
                 fi
             else
-                Download_Files https://downloads.mariadb.org/rest-api/mariadb/${Mariadb_Version_Short}/${Mariadb_Ver}-linux-systemd-x86_64.tar.gz ${Mariadb_Ver}-linux-systemd-x86_64.tar.gz
+                Download_Files https://archive.mariadb.org/${Mariadb_Ver}/bintar-linux-systemd-x86_64/${Mariadb_Ver}-linux-systemd-x86_64.tar.gz ${Mariadb_Ver}-linux-systemd-x86_64.tar.gz
                 if [ $? -ne 0 ]; then
                     Download_Files https://archive.mariadb.org/${Mariadb_Ver}/bintar-linux-systemd-x86_64/${Mariadb_Ver}-linux-systemd-x86_64.tar.gz ${Mariadb_Ver}-linux-systemd-x86_64.tar.gz
                 fi
             fi
         else
             if [ "${country}" = "CN" ]; then
-                Download_Files https://mirrors.ustc.edu.cn/mariadb/${Mariadb_Ver}/source/${Mariadb_Ver}.tar.gz ${Mariadb_Ver}.tar.gz
+                Download_Files https://archive.mariadb.org/${Mariadb_Ver}/source/${Mariadb_Ver}.tar.gz ${Mariadb_Ver}.tar.gz
                 if [ $? -ne 0 ]; then
             	    Download_Files https://archive.mariadb.org/${Mariadb_Ver}/source/${Mariadb_Ver}.tar.gz ${Mariadb_Ver}.tar.gz
                 fi
             else
-                Download_Files https://downloads.mariadb.org/rest-api/mariadb/${Mariadb_Version_Short}/${Mariadb_Ver}.tar.gz ${Mariadb_Ver}.tar.gz
+                Download_Files https://archive.mariadb.org/${Mariadb_Ver}/source/${Mariadb_Ver}.tar.gz ${Mariadb_Ver}.tar.gz
                 if [ $? -ne 0 ]; then
             	    Download_Files https://archive.mariadb.org/${Mariadb_Ver}/source/${Mariadb_Ver}.tar.gz ${Mariadb_Ver}.tar.gz
                 fi
@@ -210,35 +209,23 @@ Install_Database()
     Modify_Source
     DB_Dependent
     Check_Openssl
-    if [ "${DBSelect}" = "1" ]; then
-        Install_MySQL_51
-    elif [ "${DBSelect}" = "2" ]; then
-        Install_MySQL_55
-    elif [ "${DBSelect}" = "3" ]; then
-        Install_MySQL_56
-    elif [ "${DBSelect}" = "4" ]; then
+    if [ "${DBSelect}" = "4" ]; then
         Install_MySQL_57
     elif [ "${DBSelect}" = "5" ]; then
         Install_MySQL_80
     elif [ "${DBSelect}" = "6" ]; then
         Install_MySQL_84
     elif [ "${DBSelect}" = "7" ]; then
-        Install_MariaDB_5
-    elif [ "${DBSelect}" = "8" ]; then
-        Install_MariaDB_103
-    elif [ "${DBSelect}" = "9" ]; then
-        Install_MariaDB_104
-    elif [ "${DBSelect}" = "10" ]; then
-        Install_MariaDB_105
-    elif [ "${DBSelect}" = "11" ]; then
+        Install_MySQL_84
+    elif [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
         Install_MariaDB_106
     fi
     TempMycnf_Clean
 
-    if [[ "${DBSelect}" =~ ^[789]|1[0-1]$ ]]; then
+    if [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
         StartUp mariadb
         StartOrStop start mariadb
-    elif [[ "${DBSelect}" =~ ^[123456]$ ]]; then
+    elif [[ "${DBSelect}" =~ ^[4-7]$ ]]; then
         StartUp mysql
         StartOrStop start mysql
     fi
@@ -246,11 +233,11 @@ Install_Database()
     Clean_DB_Src_Dir
     Check_DB_Files
     if [[ "${isDB}" = "ok" ]]; then
-        if [[ "${DBSelect}" =~ ^[123456]$ ]]; then
-            Echo_Green "MySQL root password: ${DB_Root_Password}"
+        if [[ "${DBSelect}" =~ ^[4-7]$ ]]; then
+            Echo_Green "MySQL root password configured (value hidden)."
             Echo_Green "Install ${Mysql_Ver} completed! enjoy it."
-        elif [[ "${DBSelect}" =~ ^[789]|1[0-1]$ ]]; then
-            Echo_Green "MariaDB root password: ${DB_Root_Password}"
+        elif [[ "${DBSelect}" =~ ^1[0-4]$ ]]; then
+            Echo_Green "MariaDB root password configured (value hidden)."
             Echo_Green "Install ${Mariadb_Ver} completed! enjoy it."
         fi
     fi
@@ -264,7 +251,7 @@ Install_Only_Database()
     echo "+-----------------------------------------------------------------------+"
     echo "|               A tool to install MySQL/MariaDB for LNMP                |"
     echo "+-----------------------------------------------------------------------+"
-    echo "|           For more information please visit https://lnmp.org          |"
+    echo "|              Independent hardened maintenance build                   |"
     echo "+-----------------------------------------------------------------------+"
 
     Get_Dist_Name

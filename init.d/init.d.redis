@@ -21,7 +21,7 @@ REDISPORT=6379
 EXEC=/usr/local/redis/bin/redis-server
 REDIS_CLI=/usr/local/redis/bin/redis-cli
    
-PIDFILE=/var/run/redis.pid
+PIDFILE=/run/redis/redis.pid
 CONF="/usr/local/redis/etc/redis.conf"
    
 case "$1" in
@@ -30,8 +30,9 @@ case "$1" in
             echo "$PIDFILE exists, process is already running or crashed"
         else
             echo -n "Starting Redis server..."
-            $EXEC $CONF
-            if [ "$?"="0" ]; then
+            install -d -o redis -g redis -m 0750 /run/redis
+            su -s /bin/sh -c "${EXEC} ${CONF}" redis
+            if [ "$?" = "0" ]; then
                 echo " done"
             else
                 echo " failed"
@@ -42,10 +43,10 @@ case "$1" in
         if [ ! -f "$PIDFILE" ]; then
             echo "$PIDFILE does not exist, process is not running"
         else
-            PID=$(cat $PIDFILE)
+            PID=$(cat "$PIDFILE")
             echo "Stopping  Redis server..."
             $REDIS_CLI -p $REDISPORT shutdown
-            if [ "$?"="0" ]; then
+            if [ "$?" = "0" ]; then
                 echo " done"
             else
                 echo " failed"
@@ -58,11 +59,21 @@ case "$1" in
         ;;
     kill)
         echo "force kill redis server..."
-        killall redis-server
-        if [ "$?"="0" ]; then
+        PID=$(cat "$PIDFILE" 2>/dev/null)
+        case "${PID}" in
+            ''|*[!0-9]*) echo " invalid or missing pid file"; exit 1 ;;
+        esac
+        redis_exe=$(readlink "/proc/${PID}/exe" 2>/dev/null)
+        if [ "${redis_exe}" != "${EXEC}" ]; then
+            echo " refusing to kill pid ${PID}: it is not ${EXEC}"
+            exit 1
+        fi
+        if kill -9 "${PID}"; then
+            rm -f -- "${PIDFILE}"
             echo " done"
         else
             echo " failed"
+            exit 1
         fi
         ;;
     status)

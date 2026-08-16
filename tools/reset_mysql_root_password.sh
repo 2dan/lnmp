@@ -12,7 +12,7 @@ echo "|   Reset MySQL/MariaDB root Password for LNMP, Written by Licess   |"
 echo "+-------------------------------------------------------------------+"
 echo "|       A tool to reset MySQL/MariaDB root password for LNMP        |"
 echo "+-------------------------------------------------------------------+"
-echo "|       For more information please visit https://lnmp.org          |"
+echo "|         Independent hardened maintenance build                   |"
 echo "+-------------------------------------------------------------------+"
 echo "|           Usage: ./reset_mysql_root_password.sh                   |"
 echo "+-------------------------------------------------------------------+"
@@ -30,7 +30,8 @@ fi
 
 while :;do
     DB_Root_Password=""
-    read -p "Enter New ${DB_Name} root password: " DB_Root_Password
+    read -r -s -p "Enter New ${DB_Name} root password: " DB_Root_Password
+    echo
     if [ "${DB_Root_Password}" = "" ]; then
         echo "Error: Password can't be NULL!!"
     else
@@ -38,34 +39,52 @@ while :;do
     fi
 done
 
+DB_Root_Password_SQL=${DB_Root_Password//\\/\\\\}
+DB_Root_Password_SQL=${DB_Root_Password_SQL//\'/\'\'}
+
 echo "Stoping ${DB_Name}..."
-/etc/init.d/${DB_Name} stop
-echo "Starting ${DB_Name} with skip grant tables"
-/usr/local/${DB_Name}/bin/mysqld_safe --skip-grant-tables >/dev/null 2>&1 &
-sleep 5
+/etc/init.d/${DB_Name} stop || exit 1
+echo "Starting ${DB_Name} with grant tables and networking disabled"
+"/usr/local/${DB_Name}/bin/mysqld_safe" --skip-grant-tables --skip-networking >/dev/null 2>&1 &
+RESET_SAFE_PID=$!
+ready=n
+for _ in $(seq 1 30); do
+    if "/usr/local/${DB_Name}/bin/mysqladmin" -u root ping >/dev/null 2>&1; then
+        ready=y
+        break
+    fi
+    sleep 1
+done
+if [ "${ready}" != y ]; then
+    echo "Temporary ${DB_Name} server failed to start."
+    kill "${RESET_SAFE_PID}" 2>/dev/null || true
+    exit 1
+fi
 echo "update ${DB_Name} root password..."
-if echo "${DB_Ver}" | grep -Eqi '^8.0.|^5.7.|^10.[2345678].'; then
-    /usr/local/${DB_Name}/bin/mysql -u root << EOF
+if echo "${DB_Ver}" | grep -Eqi '^(5\.7\.|[89]\.|10\.[2-9]\.|1[1-9]\.)'; then
+    "/usr/local/${DB_Name}/bin/mysql" -u root << EOF
 FLUSH PRIVILEGES;
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_Root_Password}';
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_Root_Password_SQL}';
 EOF
 else
-    /usr/local/${DB_Name}/bin/mysql -u root << EOF
-update mysql.user set password = Password('${DB_Root_Password}') where User = 'root';
+    "/usr/local/${DB_Name}/bin/mysql" -u root << EOF
+update mysql.user set password = Password('${DB_Root_Password_SQL}') where User = 'root';
 EOF
 fi
 
 if [ $? -eq 0 ]; then
-    echo "Password reset succesfully. Now killing mysqld softly"
-    if command -v killall >/dev/null 2>&1; then
-        killall mysqld
-    else
-        kill `pidof mysqld`
-    fi
-    sleep 5
+    echo "Password reset successfully. Stopping the temporary server cleanly."
+    "/usr/local/${DB_Name}/bin/mysqladmin" -u root shutdown || {
+        echo "Unable to stop the temporary ${DB_Name} server safely."
+        exit 1
+    }
+    wait "${RESET_SAFE_PID}" 2>/dev/null || true
     echo "Restarting the actual ${DB_Name} service"
-    /etc/init.d/${DB_Name} start
-    echo "Password successfully reset to '${DB_Root_Password}'"
+    /etc/init.d/${DB_Name} start || exit 1
+    echo "Password successfully reset (value hidden)."
 else
     echo "Reset ${DB_Name} root password failed!"
+    "/usr/local/${DB_Name}/bin/mysqladmin" -u root shutdown >/dev/null 2>&1 || true
+    wait "${RESET_SAFE_PID}" 2>/dev/null || true
+    exit 1
 fi

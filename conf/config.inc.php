@@ -5,7 +5,7 @@
  * manual configuration. For easier setup you can use setup/
  *
  * All directives are explained in documentation in the doc/ folder
- * or at <http://docs.phpmyadmin.net/>.
+ * or at <https://docs.phpmyadmin.net/>.
  *
  * @package PhpMyAdmin
  */
@@ -14,7 +14,7 @@
  * This is needed for cookie based authentication to encrypt password in
  * cookie
  */
-$cfg['blowfish_secret'] = 'LNMPORG'; /* YOU MUST FILL IN THIS FOR COOKIE AUTH! */
+$cfg['blowfish_secret'] = '__LNMP_GENERATED_BLOWFISH_SECRET__'; /* Replaced with 64 random hex characters during installation. */
 
 /*
  * Servers configuration
@@ -72,8 +72,9 @@ $cfg['Servers'][$i]['AllowNoPassword'] = false;
 /*
  * Directories for saving/loading files from server
  */
-$cfg['UploadDir'] = 'upload';
-$cfg['SaveDir'] = 'save';
+$cfg['UploadDir'] = '';
+$cfg['SaveDir'] = '';
+$cfg['TempDir'] = '/var/lib/phpmyadmin/tmp';
 
 /**
  * Defines whether a user should be displayed a "show all (records)"
@@ -147,7 +148,7 @@ $cfg['SaveDir'] = 'save';
 
 /*
  * You can find more configuration options in the documentation
- * in the doc/ folder or at <http://docs.phpmyadmin.net/>.
+ * in the doc/ folder or at <https://docs.phpmyadmin.net/>.
  */
 $cfg['VersionCheck'] = false;
 ?>

@@ -34,7 +34,7 @@ fi
 
 echo "Downloading..."
 cd ../src
-Download_Files https://fossies.org/linux/privat/denyhosts-3.1.tar.gz denyhosts-3.1.tar.gz
+Download_Files https://github.com/denyhosts/denyhosts/archive/refs/tags/v3.1.tar.gz denyhosts-3.1.tar.gz
 Tar_Cd denyhosts-3.1.tar.gz denyhosts-3.1
 echo "Installing..."
 python setup.py install
@@ -82,7 +82,7 @@ sed -i 's#^DENY_THRESHOLD_ROOT =.*#DENY_THRESHOLD_ROOT = 3#g' /etc/denyhosts.con
 
 sed -i '/STATE_LOCK_EXISTS\ \=\ \-2/aif not os.path.exists("/var/lock/subsys"): os.makedirs("/var/lock/subsys")' /etc/init.d/denyhosts
 cd ..
-rm -rf denyhosts-3.1
+rm -rf -- denyhosts-3.1
 
 StartUp denyhosts
 echo "Start DenyHosts..."

@@ -17,6 +17,8 @@ Upgrade_Date=$(date +"%Y%m%d%H%M%S")
 . include/main.sh
 . include/init.sh
 . include/php.sh
+. include/multiplephp.sh
+. include/tuning.sh
 . include/nginx.sh
 . include/mysql.sh
 . include/mariadb.sh
@@ -30,6 +32,7 @@ Upgrade_Date=$(date +"%Y%m%d%H%M%S")
 
 Get_Dist_Name
 Get_Dist_Version
+Configure_Build_Defaults
 MemTotal=$(awk '/MemTotal/ {printf( "%d\n", $2 / 1024 )}' /proc/meminfo)
 
 Display_Upgrade_Menu()
@@ -38,10 +41,9 @@ Display_Upgrade_Menu()
     echo "2: Upgrade MySQL"
     echo "3: Upgrade MariaDB"
     echo "4: Upgrade PHP for LNMP"
-    echo "5: Upgrade PHP for LNMPA or LAMP"
-    echo "6: Upgrade MySQL to MariaDB"
-    echo "7: Upgrade phpMyAdmin"
-    echo "8: Upgrade Multiple PHP"
+    echo "5: Upgrade MySQL to MariaDB"
+    echo "6: Upgrade phpMyAdmin"
+    echo "7: Upgrade Multiple PHP"
     echo "exit: Exit current script"
     echo "###################################################"
     read -p "Enter your choice (1, 2, 3, 4, 5, 6, 7 or exit): " action
@@ -49,11 +51,11 @@ Display_Upgrade_Menu()
 
 clear
 echo "+-----------------------------------------------------------------------+"
-echo "|            Upgrade script for LNMP V2.1, Written by Licess            |"
+echo "|             Upgrade script for LNMP V2.3 hardened branch              |"
 echo "+-----------------------------------------------------------------------+"
-echo "|     A tool to upgrade Nginx,MySQL/Mariadb,PHP for LNMP/LNMPA/LAMP     |"
+echo "|          A tool to upgrade Nginx, MySQL/MariaDB and PHP for LNMP      |"
 echo "+-----------------------------------------------------------------------+"
-echo "|           For more information please visit https://lnmp.org          |"
+echo "|              Independent hardened maintenance build                   |"
 echo "+-----------------------------------------------------------------------+"
 
 if [ "${action}" == "" ]; then
@@ -71,26 +73,22 @@ fi
         Upgrade_MariaDB 2>&1 | tee /root/upgrade_mariadb${Upgrade_Date}.log
         ;;
     4|[pP][hP][pP])
-        Stack="lnmp"
         Upgrade_PHP 2>&1 | tee /root/upgrade_lnmp_php${Upgrade_Date}.log
         ;;
-    5|[pP][hP][pP][aA])
-        Upgrade_PHP 2>&1 | tee /root/upgrade_a_php${Upgrade_Date}.log
-        ;;
-    6|[mM]2[mY])
+    5|[mM]2[mY])
         Upgrade_MySQL2MariaDB 2>&1 | tee /root/upgrade_mysql2mariadb${Upgrade_Date}.log
         ;;
-    7|[pP][hH][pP][mM][yY][aA][dD][mM][iI][nN])
+    6|[pP][hH][pP][mM][yY][aA][dD][mM][iI][nN])
         Upgrade_phpMyAdmin 2>&1 | tee /root/upgrade_phpmyadmin${Upgrade_Date}.log
         ;;
-    8|[mM][pP][hH][pP])
+    7|[mM][pP][hH][pP])
         Upgrade_Multiplephp 2>&1 | tee /root/upgrade_mphp${Upgrade_Date}.log
         ;;
     [eE][xX][iI][tT])
         exit 1
         ;;
     *)
-        echo "Usage: ./upgrade.sh {nginx|mysql|mariadb|m2m|php|phpa|phpmyadmin}"
+        echo "Usage: ./upgrade.sh {nginx|mysql|mariadb|m2m|php|phpmyadmin|mphp}"
         exit 1
     ;;
     esac
